@@ -1,0 +1,310 @@
+{
+  "functions": {
+    "NVL": {
+      "spark_sql": "COALESCE",
+      "pyspark": "F.coalesce",
+      "notes": "NVL(a,b) -> COALESCE(a,b). Oracle treats '' as NULL; Spark does not."
+    },
+    "NVL2": {
+      "spark_sql": "CASE WHEN {0} IS NOT NULL THEN {1} ELSE {2} END",
+      "pyspark": "F.when(F.col('{0}').isNotNull(), {1}).otherwise({2})",
+      "notes": "NVL2(expr, val_if_not_null, val_if_null)"
+    },
+    "DECODE": {
+      "spark_sql": "CASE",
+      "pyspark": "F.when().otherwise()",
+      "notes": "DECODE(expr, search1, result1, ..., default) -> CASE WHEN expr=search1 THEN result1 ... ELSE default END"
+    },
+    "SYSDATE": {
+      "spark_sql": "CURRENT_TIMESTAMP()",
+      "pyspark": "F.current_timestamp()",
+      "notes": "Oracle SYSDATE has second precision. Spark CURRENT_TIMESTAMP has microsecond precision."
+    },
+    "TRUNC_DATE": {
+      "spark_sql": "DATE_TRUNC",
+      "patterns": {
+        "TRUNC(date)": "DATE_TRUNC('DAY', date)",
+        "TRUNC(date, 'MONTH')": "DATE_TRUNC('MONTH', date)",
+        "TRUNC(date, 'MM')": "DATE_TRUNC('MONTH', date)",
+        "TRUNC(date, 'YEAR')": "DATE_TRUNC('YEAR', date)",
+        "TRUNC(date, 'YY')": "DATE_TRUNC('YEAR', date)",
+        "TRUNC(date, 'MI')": "DATE_TRUNC('MINUTE', date)",
+        "TRUNC(date, 'Q')": "DATE_TRUNC('QUARTER', date)",
+        "TRUNC(SYSDATE, 'MONTH') - 1": "DATE_SUB(DATE_TRUNC('MONTH', CURRENT_DATE()), 1)"
+      },
+      "notes": "Oracle TRUNC(date) truncates to day. TRUNC(date,'MONTH') to first of month. date - N subtracts N days in Oracle."
+    },
+    "TO_CHAR": {
+      "spark_sql": "DATE_FORMAT",
+      "format_mapping": {
+        "YYYYMM": "yyyyMM",
+        "YYYY": "yyyy",
+        "MM": "MM",
+        "DD": "dd",
+        "MON": "MMM",
+        "MONTH": "MMMM",
+        "MON_YYYY": "MMM_yyyy",
+        "MONYY": "MMMyy",
+        "MON_YY": "MMM_yy",
+        "YYYYMMDD": "yyyyMMdd",
+        "DD-MON-YYYY": "dd-MMM-yyyy",
+        "DD-MON-YY": "dd-MMM-yy",
+        "DD/MM/YYYY": "dd/MM/yyyy",
+        "YYYY-MM-DD": "yyyy-MM-dd",
+        "HH24:MI:SS": "HH:mm:ss",
+        "DD-MON-YYYY HH24:MI:SS": "dd-MMM-yyyy HH:mm:ss",
+        "RRRR": "yyyy",
+        "DY": "EEE",
+        "DAY": "EEEE",
+        "D": "u",
+        "FMDD": "d",
+        "FMMM": "M"
+      },
+      "notes": "Oracle TO_CHAR(date, fmt) -> Spark DATE_FORMAT(date, fmt). TO_CHAR(number) -> CAST(number AS STRING)."
+    },
+    "TO_DATE": {
+      "spark_sql": "TO_DATE",
+      "notes": "Oracle TO_DATE(str, fmt) -> Spark TO_DATE(str, fmt) with format mapping applied. Oracle implicit string-to-date (e.g., WHERE date >= '01-Mar-20') must become explicit TO_DATE."
+    },
+    "TO_NUMBER": {
+      "spark_sql": "CAST({0} AS DECIMAL)",
+      "pyspark": "F.col('{0}').cast('decimal')",
+      "notes": "Oracle TO_NUMBER(str) -> CAST(str AS DECIMAL) or CAST(str AS INT/BIGINT) depending on context."
+    },
+    "ADD_MONTHS": {
+      "spark_sql": "ADD_MONTHS",
+      "pyspark": "F.add_months",
+      "notes": "Same function name in Spark SQL. Semantics are compatible."
+    },
+    "MONTHS_BETWEEN": {
+      "spark_sql": "MONTHS_BETWEEN",
+      "pyspark": "F.months_between",
+      "notes": "Same function name. Spark returns a double; Oracle returns a number."
+    },
+    "LAST_DAY": {
+      "spark_sql": "LAST_DAY",
+      "pyspark": "F.last_day",
+      "notes": "Same function name in Spark SQL."
+    },
+    "INSTR": {
+      "spark_sql": "INSTR",
+      "pyspark": "F.instr",
+      "notes": "Oracle INSTR(str, substr, pos, occurrence) — Spark INSTR only supports (str, substr). For pos/occurrence, use LOCATE or regexp."
+    },
+    "SUBSTR": {
+      "spark_sql": "SUBSTRING",
+      "pyspark": "F.substring",
+      "notes": "Oracle SUBSTR(str, pos, len) -> Spark SUBSTRING(str, pos, len). 1-based indexing in both."
+    },
+    "LENGTH": {
+      "spark_sql": "LENGTH",
+      "pyspark": "F.length",
+      "notes": "Same function name."
+    },
+    "UPPER": {
+      "spark_sql": "UPPER",
+      "pyspark": "F.upper",
+      "notes": "Same function name."
+    },
+    "LOWER": {
+      "spark_sql": "LOWER",
+      "pyspark": "F.lower",
+      "notes": "Same function name."
+    },
+    "TRIM": {
+      "spark_sql": "TRIM",
+      "pyspark": "F.trim",
+      "notes": "Same function name."
+    },
+    "LTRIM": {
+      "spark_sql": "LTRIM",
+      "pyspark": "F.ltrim",
+      "notes": "Same function name."
+    },
+    "RTRIM": {
+      "spark_sql": "RTRIM",
+      "pyspark": "F.rtrim",
+      "notes": "Same function name."
+    },
+    "REPLACE": {
+      "spark_sql": "REPLACE",
+      "pyspark": "F.regexp_replace",
+      "notes": "Same function name for simple replacement."
+    },
+    "LPAD": {
+      "spark_sql": "LPAD",
+      "pyspark": "F.lpad",
+      "notes": "Same function name."
+    },
+    "RPAD": {
+      "spark_sql": "RPAD",
+      "pyspark": "F.rpad",
+      "notes": "Same function name."
+    },
+    "ROUND": {
+      "spark_sql": "ROUND",
+      "pyspark": "F.round",
+      "notes": "Same function name. Banker's rounding difference possible."
+    },
+    "ABS": {
+      "spark_sql": "ABS",
+      "pyspark": "F.abs",
+      "notes": "Same function name."
+    },
+    "SIGN": {
+      "spark_sql": "SIGN",
+      "notes": "Same function name."
+    },
+    "CEIL": {
+      "spark_sql": "CEIL",
+      "pyspark": "F.ceil",
+      "notes": "Same function name."
+    },
+    "FLOOR": {
+      "spark_sql": "FLOOR",
+      "pyspark": "F.floor",
+      "notes": "Same function name."
+    },
+    "GREATEST": {
+      "spark_sql": "GREATEST",
+      "pyspark": "F.greatest",
+      "notes": "Same function name."
+    },
+    "LEAST": {
+      "spark_sql": "LEAST",
+      "pyspark": "F.least",
+      "notes": "Same function name."
+    },
+    "COALESCE": {
+      "spark_sql": "COALESCE",
+      "pyspark": "F.coalesce",
+      "notes": "Same function name."
+    },
+    "CASE": {
+      "spark_sql": "CASE",
+      "pyspark": "F.when().otherwise()",
+      "notes": "Same syntax in SQL."
+    },
+    "COUNT": {
+      "spark_sql": "COUNT",
+      "pyspark": "F.count",
+      "notes": "Same function name."
+    },
+    "SUM": {
+      "spark_sql": "SUM",
+      "pyspark": "F.sum",
+      "notes": "Same function name."
+    },
+    "MAX": {
+      "spark_sql": "MAX",
+      "pyspark": "F.max",
+      "notes": "Same function name."
+    },
+    "MIN": {
+      "spark_sql": "MIN",
+      "pyspark": "F.min",
+      "notes": "Same function name."
+    },
+    "AVG": {
+      "spark_sql": "AVG",
+      "pyspark": "F.avg",
+      "notes": "Same function name."
+    },
+    "LEAD": {
+      "spark_sql": "LEAD",
+      "pyspark": "F.lead",
+      "notes": "Same function name. Requires OVER() clause."
+    },
+    "LAG": {
+      "spark_sql": "LAG",
+      "pyspark": "F.lag",
+      "notes": "Same function name. Requires OVER() clause."
+    },
+    "ROW_NUMBER": {
+      "spark_sql": "ROW_NUMBER",
+      "pyspark": "F.row_number",
+      "notes": "Same function name. Requires OVER() clause."
+    },
+    "RANK": {
+      "spark_sql": "RANK",
+      "pyspark": "F.rank",
+      "notes": "Same function name."
+    },
+    "DENSE_RANK": {
+      "spark_sql": "DENSE_RANK",
+      "pyspark": "F.dense_rank",
+      "notes": "Same function name."
+    },
+    "ROWNUM": {
+      "spark_sql": "ROW_NUMBER() OVER (ORDER BY 1)",
+      "notes": "Oracle ROWNUM is a pseudo-column. In WHERE: ROWNUM < N -> use ROW_NUMBER() window or LIMIT. In correlated subquery with ROWNUM < 2: means 'first matching row'."
+    },
+    "DUAL": {
+      "spark_sql": "",
+      "notes": "Oracle's DUAL table. In Spark SQL, just remove 'FROM DUAL'. SELECT 1 FROM DUAL -> SELECT 1."
+    },
+    "SQLERRM": {
+      "spark_sql": "str(e)",
+      "notes": "Oracle SQLERRM returns error message string. In Python: except Exception as e: str(e)"
+    },
+    "COMMIT": {
+      "spark_sql": "-- checkpoint/write boundary",
+      "notes": "No direct Spark equivalent. Represents write materialization point. In PySpark, each write operation is atomic."
+    },
+    "ROLLBACK": {
+      "spark_sql": "-- error handling",
+      "notes": "No direct Spark equivalent. Use try/except in Python for error handling."
+    }
+  },
+  "oracle_hints_to_drop": [
+    "/*+ APPEND */",
+    "/*+ APPEND PARALLEL */",
+    "/*+ enable_parallel_dml */",
+    "/*+ enable_parallel_dml parallel(8) */",
+    "/*+ enable_parallel_dml parallel(4) */",
+    "/*+ enable_parallel_dml parallel(6) */",
+    "/*+enable_parallel_dml_parallel(8) */",
+    "/*+ APPEND enable_parallel_dml */",
+    "/*+ APPEND +*/"
+  ],
+  "dbms_packages_to_replace": {
+    "DBMS_STATS.Gather_Table_Stats": {
+      "replacement": "spark.sql('ANALYZE TABLE {schema}.{table} COMPUTE STATISTICS')",
+      "notes": "Optional in Spark. Spark handles stats automatically for most operations."
+    },
+    "DBMS_SCHEDULER.Create_Job": {
+      "replacement": "concurrent.futures.ThreadPoolExecutor",
+      "notes": "Replace with Python concurrent execution or Airflow DAG."
+    },
+    "DBMS_SESSION.Sleep": {
+      "replacement": "time.sleep",
+      "notes": "Direct Python equivalent."
+    },
+    "EXECUTE IMMEDIATE 'truncate table'": {
+      "replacement": "spark.sql('TRUNCATE TABLE {table}')",
+      "notes": "Or use DataFrame write with mode='overwrite'."
+    },
+    "EXECUTE IMMEDIATE 'alter table'": {
+      "replacement": "# Partition management handled by Spark/Iceberg automatically",
+      "notes": "Spark/Iceberg handles partitioning differently. ADD PARTITION, index rebuild not needed."
+    }
+  },
+  "date_arithmetic": {
+    "date - N": "DATE_SUB(date, N)",
+    "date + N": "DATE_ADD(date, N)",
+    "date - date": "DATEDIFF(date1, date2)",
+    "SYSDATE + (1/24)": "CURRENT_TIMESTAMP() + INTERVAL 1 HOUR",
+    "SYSDATE + (1/1440)": "CURRENT_TIMESTAMP() + INTERVAL 1 MINUTE",
+    "SYSDATE + (1/14400)": "CURRENT_TIMESTAMP() + INTERVAL 6 SECONDS"
+  },
+  "outer_join_syntax": {
+    "WHERE a.col = b.col(+)": "LEFT JOIN b ON a.col = b.col",
+    "WHERE a.col(+) = b.col": "RIGHT JOIN b ON a.col = b.col",
+    "notes": "Oracle (+) outer join syntax. The (+) goes on the deficient side."
+  },
+  "implicit_conversions": {
+    "string_to_date": "Oracle implicitly converts strings to dates using NLS_DATE_FORMAT. Spark requires explicit TO_DATE() with format string.",
+    "null_empty_string": "Oracle treats '' (empty string) as NULL. Spark does not. This affects NVL/COALESCE behavior on string columns.",
+    "number_to_string": "Oracle implicitly converts numbers to strings in concatenation. Spark requires explicit CAST."
+  }
+}

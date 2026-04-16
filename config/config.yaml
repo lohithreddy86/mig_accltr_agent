@@ -1,0 +1,407 @@
+# =============================================================================
+# SQL Migration System — Master Configuration
+# All tuneable parameters live here. Agent code reads these via ConfigLoader.
+# Environment-specific secrets go in .env (never here).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PROJECT PATHS
+# -----------------------------------------------------------------------------
+paths:
+  # Base directories (relative to project root, or absolute)
+  artifact_store:   "./artifacts"        # All inter-agent outputs
+  adapters_dir:     "./adapters"         # Persisted dialect adapters
+  sandbox_scripts:  "./sandbox_scripts"  # Scripts run inside Podman containers
+  logs_dir:         "./logs"
+  temp_dir:         "/tmp/sql_migration"
+
+  # Artifact subdirectory layout (under artifact_store)
+  subdirs:
+    analysis:       "00_analysis"
+    planning:       "01_planning"
+    orchestrator:   "02_orchestrator"
+    conversion:     "03_conversion"
+    validation:     "04_validation"
+    feedback:       "05_developer_feedback"
+    samples:        "06_samples"
+    provenance:     "07_provenance"       # v6: Artifact lineage tracking
+
+# -----------------------------------------------------------------------------
+# LLM CONFIGURATION (via LiteLLM)
+# -----------------------------------------------------------------------------
+llm:
+  # Primary model for all agent calls
+  # Use the model name as your LiteLLM proxy serves it.
+  # When api_base is set, LiteLLM sends the model name as-is to the proxy.
+  primary_model:    "anthropic/claude-haiku-4-5-20251001"
+
+  # Per-agent model overrides (leave empty to use primary_model)
+  agent_models:
+    analysis:       ""
+    planning:       ""
+    orchestrator:   ""   # Orchestrator makes NO LLM calls — this is ignored
+    conversion:     ""
+    validation:     ""
+
+  # API call parameters
+  temperature:      0.1   # Low temperature for deterministic code generation
+  max_tokens:       32768   # Haiku 4.5 caps output at 64k; keep headroom
+  timeout_seconds:  120
+  retry_attempts:   3
+  retry_backoff_base: 5   # Exponential backoff: 5s, 25s — stays under 1-min rate window
+
+  # JSON response enforcement
+  # Agents that require JSON output get this injected into their prompt suffix
+  json_mode: true
+
+  # Enterprise LLM proxy settings
+  # api_base: full URL to the proxy's /v1 endpoint (NOT including /chat/completions)
+  # api_key_env: name of the env var that holds the Bearer token
+  # ssl_verify: set false for proxies with internal/self-signed certificates
+  api_base:         ""                   # Empty = LiteLLM default Anthropic routing
+  api_key_env:      "ANTHROPIC_API_KEY"  # Direct Anthropic API key from .env
+  ssl_verify:       true
+
+# -----------------------------------------------------------------------------
+# SANDBOX (Podman)
+# Each agent gets its own container per invocation.
+# -----------------------------------------------------------------------------
+sandbox:
+  enabled:          true
+  runtime:          "docker"
+
+  # Container image — must have: python3, pyspark, sqlglot, sqlparse,
+  #                              pandas, pyarrow, python-docx, networkx
+  image:            "localhost/chatbot-sandbox-spark:latest"
+
+  # Resource limits per container
+  cpu_limit:        "2.0"         # CPUs
+  memory_limit:     "4g"          # RAM
+  timeout_seconds:  300           # Kill container after this many seconds
+
+  # Mount points (host_path:container_path)
+  # artifact_store is mounted read-write so scripts can read/write artifacts
+  # source_files mount is set per-job at runtime
+  base_mounts:
+    - type: "bind"
+      source: "${ARTIFACT_STORE_PATH}"   # Resolved at runtime from paths.artifact_store
+      target: "/artifacts"
+      options: "rw"
+    - type: "bind"
+      source: "${SANDBOX_SCRIPTS_PATH}"  # Resolved at runtime from paths.sandbox_scripts
+      target: "/scripts"
+      options: "ro"
+
+  # Environment variables injected into every container
+  # Java, PySpark, Spark config are baked into the image via spark-defaults.conf
+  container_env:
+    PYTHONPATH:       "/scripts"
+    # Spark in --network=none containers can't resolve its own hostname;
+    # pin to loopback so the driver/worker handshake succeeds.
+    SPARK_LOCAL_HOSTNAME: "localhost"
+    SPARK_LOCAL_IP:       "127.0.0.1"
+
+# -----------------------------------------------------------------------------
+# TRINO MCP SERVER
+# -----------------------------------------------------------------------------
+mcp:
+  server_url:         "${TRINO_MCP_SERVER_URL}"   # From .env
+  transport:          "sse"                        # "sse" or "stdio"
+  connection_timeout: 30
+  query_timeout:      60
+  max_retries:        3
+
+  # Available tools on the MCP server
+  tools:
+    list_schemas:     "list_schemas"
+    list_tables:      "list_tables"
+    describe_table:   "get_table_schema"
+    run_query:        "execute_query"
+
+  # Safety: run_query is read-only — these DML keywords are blocked
+  blocked_keywords:   ["INSERT", "UPDATE", "DELETE", "DROP", "CREATE",
+                       "ALTER", "TRUNCATE", "MERGE"]
+
+  # Sample data pull limits
+  sample_row_limit:   200
+  schema_probe_query: "SELECT * FROM {table} LIMIT 0"
+
+# -----------------------------------------------------------------------------
+# DETECTION AGENT
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# ANALYSIS AGENT (v10: absorbs Detection setup into A0 phase)
+# -----------------------------------------------------------------------------
+analysis:
+  # A0 setup — HEAD sample for adapter validation
+  head_sample_lines:  200   # Lines to read from source file for A0 LLM call
+
+  # Adapter registry — maps dialect_id to adapter file path
+  # Paths are relative to adapters_dir. A0 LLM uses these for tool-based selection.
+  adapter_registry:
+    oracle:     "oracle.json"
+    db2:        "db2.json"
+    sqlserver:  "sqlserver.json"
+    teradata:   "teradata.json"
+    hive:       "hive.json"
+    snowflake:  "snowflake.json"
+    generic:    "generic.json"   # Fallback adapter
+
+  # A2 per-proc LLM analysis (v10 Task 2)
+  # Each proc's full body is sent to the LLM individually with a focused prompt.
+  # Rolling summary from previous procs provides cross-proc context.
+  per_proc_max_lines:         600    # Procs larger than this fall back to regex analysis
+  rolling_summary_max_chars:  3000   # Truncate rolling summary to fit context window
+  # per_proc_timeout_seconds not needed — global llm.timeout_seconds applies
+
+  # Query mode (source_type=sql_queries in README)
+  query_mode_max_statements: 500    # Cap: abort if file has more statements than this
+
+  # Deep extraction: run for procs meeting ANY of these criteria (fallback path)
+  deep_extract_triggers:
+    min_line_count:           300   # Proc body >= this many lines
+    has_dynamic_sql:          true  # Always deep-extract if dynamic SQL detected
+    has_unsupported_min:      1     # Deep-extract if >= 1 unsupported construct
+
+  # Complexity scoring
+  complexity_rules:
+    cursor_nesting_high_threshold:  2   # nesting_depth > this → HIGH
+    unmapped_constructs_medium:     1   # >= this unmapped → bump up one tier
+    unmapped_constructs_manual:     6   # >= this unmapped → NEEDS_MANUAL
+
+  # Topological sort fallback (when cycles exist)
+  cycle_handling:         "flag_and_continue"   # "flag_and_continue" | "abort"
+
+  # Missing dependency resolution
+  missing_dep_max_retries: 2    # Attempts to resolve external proc dependency
+  missing_dep_action:      "stub_and_continue"  # "stub_and_continue" | "abort"
+
+# -----------------------------------------------------------------------------
+# PLANNING AGENT
+# -----------------------------------------------------------------------------
+planning:
+  # Chunk sizing (v10: raised from 175/200 — modern LLMs handle larger contexts)
+  chunk_target_lines:     400   # Target lines per chunk
+  chunk_max_lines:        500   # Hard maximum
+  chunk_min_lines:        80    # Don't create chunks smaller than this
+
+  # Strategy selection thresholds
+  strategy_rules:
+    unmapped_medium_threshold: 3   # > this unmapped → escalate to MEDIUM
+    unmapped_manual_threshold: 6   # > this unmapped → NEEDS_MANUAL
+
+  # Shared utility threshold
+  shared_utility_min_callers: 3  # Proc called by >= this many others → shared utility
+
+  # Loop guard defaults (baked into plan.json per proc)
+  loop_guards:
+    max_chunk_retry:    0   # Tier-1: no retry — a retry re-runs the full ~3m pipeline with identical inputs. If first attempt fails review, mark PARTIAL (still usable output).
+    max_replan_depth:   0   # Tier-3: no replan cycles — chunks that fail after targeted_repair go straight to PARTIAL/FROZEN.
+    frozen_after:       0   # Match max_replan_depth — proc becomes FROZEN after its first failure (best-so-far code is still written to disk).
+
+  # Module grouping — P1.5 step that groups related procs into output modules
+  # Instead of 1:1 proc→file mapping, the LLM groups related procs into
+  # cohesive Python modules / SQL scripts. A module is the unit of conversion,
+  # validation, and human review downstream.
+  module_grouping:
+    enabled:                false   # Disabled: each proc is its own chunk so the deterministic converter processes them individually (98+ acceptance rate)
+    max_procs_per_module:   8       # Cap module size to keep LLM context manageable
+    merge_write_conflicts:  true    # Procs writing to same table → same module
+
+# -----------------------------------------------------------------------------
+# ORCHESTRATOR
+# -----------------------------------------------------------------------------
+orchestrator:
+  # Checkpoint write frequency
+  checkpoint_on_every_state_change: true
+
+  # Dispatch
+  max_concurrent_procs:   1   # Declared but NOT wired — orchestrator dispatch is sequential. Real parallelism requires refactor (Tier 2/3).
+  dispatch_poll_interval: 2   # Seconds between result file checks
+
+  # Human feedback
+  # When a proc is FROZEN, the orchestrator writes a feedback bundle and
+  # optionally PAUSES the pipeline to wait for human input before continuing.
+  human_feedback:
+    mode:           "file"    # "file" (write bundle, continue) | "pause" (wait for input)
+    pause_timeout:  3600      # Seconds to wait for human input before auto-continuing
+    feedback_file_pattern: "developer_feedback_{proc_name}.json"
+    resolved_file_pattern: "feedback_resolved_{proc_name}.json"
+
+# -----------------------------------------------------------------------------
+# AGENTIC TOOL-CALLING LOOP (Conversion Agent C2-C4)
+# -----------------------------------------------------------------------------
+agentic:
+  # Budget formula: budget = max_chunk_self_corrections × multiplier + base
+  conversion_budget_multiplier: 3   # Tool calls per correction attempt
+  conversion_budget_base:       8   # Base tool calls (initial convert + submit + a couple of fixes)
+
+  # Turn formula: max_turns = max_chunk_self_corrections × multiplier + base
+  conversion_turns_multiplier:  3   # LLM turns per correction attempt
+  conversion_turns_base:        8   # Base turns — Haiku needs room to finish with self_corrections=0
+
+  # Per-tool cost weights (higher cost = burns budget faster)
+  tool_costs:
+    run_pyspark:   3   # Slow: PySpark startup + execution + teardown
+    validate_sql:  1   # Fast: sqlglot parse, no subprocess
+    query_trino:   1   # Fast: MCP read-only query
+    submit_result: 0   # Free: terminal call
+
+# -----------------------------------------------------------------------------
+# CONVERSION AGENT
+# -----------------------------------------------------------------------------
+conversion:
+  max_chunk_self_corrections: 0   # One review + one repair path — no re-review loop
+
+  # Query mode: smaller budget, single retry
+  query_mode_max_retries: 1       # Single retry for query conversion (vs 2 for procs)
+  query_mode_budget:      4       # Tool calls per query (convert → validate → fix → submit)
+
+  sandbox_validation:
+    run_remnant_check:    true   # Check for unconverted dialect functions at submit
+    run_test_execution:   true   # Run integration test on assembled multi-chunk output
+
+# -----------------------------------------------------------------------------
+# VALIDATION AGENT
+# -----------------------------------------------------------------------------
+validation:
+  # Validation levels (determined by data availability)
+  levels:
+    1: "static_analysis_only"
+    2: "schema_check_plus_synthetic_exec"
+    3: "full_reconciliation_with_semantic_diff"
+
+  # Level thresholds
+  min_rows_for_level_3:   50    # Source table must have >= this for LEVEL_3
+  sample_row_count:       200   # Rows pulled from Trino for sample execution
+
+  # Scoring thresholds
+  scoring:
+    row_deviation_fail:   0.30   # Row count deviation > 30% → FAIL
+    row_deviation_warn:   0.10   # Row count deviation > 10% → PARTIAL warning
+    max_todos_for_pass:   0      # Any TODO (unmapped) → at least PARTIAL
+
+  # Synthetic data generation (LEVEL_2)
+  synthetic_data:
+    add_null_row:         true   # Add a row with all nullable cols set to NULL
+    add_boundary_values:  true   # Add rows with min/max values for numeric cols
+    null_row_count:       1
+
+  # Semantic diff (LEVEL_3 only)
+  semantic_diff:
+    enabled:              true
+    column_status_fail:   ["MISSING_IN_TRINO"]
+    column_status_warn:   ["TYPE_CHANGED", "EXTRA_IN_TRINO"]
+    column_status_ok:     ["MATCH", "RENAMED", "TYPE_WIDENED"]
+
+# -----------------------------------------------------------------------------
+# HUMAN FEEDBACK (Global)
+# -----------------------------------------------------------------------------
+human_feedback:
+  # FROZEN proc bundle contents
+  bundle_includes:
+    - "manifest_entry"
+    - "complexity_report_entry"
+    - "all_chunk_converted_code"
+    - "all_validation_reports"
+    - "error_history"
+    - "manual_review_items"    # UNMAPPED TODO list
+
+  # Resolution actions a human can specify in feedback_resolved_{proc}.json
+  valid_actions:
+    - "manual_rewrite_provided"        # Human provides corrected code directly
+    - "mark_skip"                      # Skip this proc entirely
+    - "override_pass"                  # Human confirms output is acceptable
+    - "replan_with_notes"              # Human adds notes for Planning Agent to retry
+    - "upload_source_and_reanalyze"    # Upload missing UDF, re-run Analysis+Planning for affected procs
+
+# -----------------------------------------------------------------------------
+# LOGGING
+# -----------------------------------------------------------------------------
+logging:
+  level:            "INFO"    # DEBUG | INFO | WARNING | ERROR
+  format:           "json"    # "json" | "text"
+  per_agent_files:  true      # Write separate log file per agent per run
+  include_prompts:  false     # Set to true for debugging — logs full LLM prompts
+  include_responses: false    # Set to true for debugging — logs full LLM responses
+
+# -----------------------------------------------------------------------------
+# RUN METADATA
+# -----------------------------------------------------------------------------
+run:
+  # These are overridable at CLI level — defaults here
+  run_id_prefix:    "migration"   # run_id = "{prefix}_{timestamp}"
+  dry_run:          false          # If true: skip LLM calls, use mock responses
+  stop_on_first_frozen: false      # Abort pipeline if any proc is FROZEN
+  procs_filter:     []             # If non-empty: only process these proc names
+
+# =============================================================================
+# v5 ANTI-HALLUCINATION GATES
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# DEPENDENCY GATE (Pre-Planning checkpoint)
+# Surfaces unresolved external deps BEFORE any conversion compute.
+# -----------------------------------------------------------------------------
+dependency_gate:
+  enabled:              true
+  # How to handle in CLI (non-interactive) mode
+  cli_auto_action:      "stub_todo"   # "stub_todo" | "abort" | "skip_callers"
+  # Minimum callers to trigger a gate pause (1 = always pause)
+  min_callers_to_gate:  1
+
+# -----------------------------------------------------------------------------
+# WRITE SEMANTICS (Planning sub-step, after P4 write-conflict detection)
+# Classifies DML intent per proc for shared-write tables.
+# Generates MANDATORY write-mode directives injected into C2 prompts.
+# -----------------------------------------------------------------------------
+write_semantics:
+  enabled:              true
+  # Confidence threshold below which to flag for human review
+  low_confidence_threshold: 0.5
+  # Default write mode when intent cannot be determined
+  # "append" is safe — never overwrites another proc's data
+  default_write_mode:   "append"
+
+# -----------------------------------------------------------------------------
+# PREFLIGHT ASSESSMENT (after Planning, before Orchestrator)
+# Scores hallucination risk per proc. Surfaces estimated LLM calls.
+# -----------------------------------------------------------------------------
+preflight:
+  enabled:              true
+  # Risk score thresholds (higher = more likely to hallucinate)
+  critical_threshold:   50    # NEEDS_MANUAL + unresolved_deps + write_conflicts
+  high_threshold:       30    # HIGH complexity + multi-chunk + unresolved_deps
+  medium_threshold:     15    # cursor_nesting > 2 + unsupported > 3
+  # Pause pipeline on CRITICAL procs (interactive mode only)
+  pause_on_critical:    true
+
+# -----------------------------------------------------------------------------
+# v6: GLOBAL ERROR AGGREGATOR (Orchestrator cross-cutting)
+# Detects systematic cross-proc error patterns and trips a circuit breaker
+# to prevent cascading LLM call waste.
+# Ref: "From Spark to Fire" (Xie et al., March 2026) — genealogy governance
+# Ref: DeepMind "Towards a Science of Scaling Agent Systems" (Dec 2025)
+# -----------------------------------------------------------------------------
+global_error_aggregator:
+  enabled:              true
+  # Number of distinct procs that must show the same normalised error
+  # signature before the circuit breaker trips.
+  cross_proc_threshold: 3
+  # Hard pause after this many procs reach FROZEN, regardless of
+  # whether a single signature dominates.
+  max_failed_procs:     5
+
+# -----------------------------------------------------------------------------
+# v6: PROVENANCE TRACKING (Orchestrator cross-cutting)
+# Tracks lineage and confidence of shared artifacts (converted code,
+# adapter mappings, table registry entries).
+# Callee signatures below the confidence threshold get a LOW_CONFIDENCE
+# warning injected into the caller's C2 prompt.
+# Ref: "From Spark to Fire" — genealogy-based governance layer
+# -----------------------------------------------------------------------------
+provenance:
+  enabled:              true
+  # Callee signatures below this confidence threshold get a warning
+  # tag injected into the caller's C2 prompt.
+  low_confidence_threshold: 0.6

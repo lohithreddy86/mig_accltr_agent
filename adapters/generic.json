@@ -1,0 +1,76 @@
+{
+  "dialect_id": "generic",
+  "dialect_display": "Generic SQL (fallback adapter)",
+  "proc_boundary": {
+    "start_patterns": [
+      "CREATE\\s+(?:OR\\s+(?:REPLACE|ALTER)\\s+)?(?:PROCEDURE|FUNCTION|PROC|MACRO)\\s+(?:[\\w$.]+\\.)?\\w+",
+      "REPLACE\\s+(?:PROCEDURE|FUNCTION|MACRO)\\s+(?:[\\w$.]+\\.)?\\w+",
+      "ALTER\\s+(?:PROCEDURE|FUNCTION|PROC)\\s+(?:[\\w$.]+\\.)?\\w+",
+      "^\\s*(?:PROCEDURE|FUNCTION)\\s+\\w+\\s+(?:IS|AS)"
+    ],
+    "start_pattern": "(?:CREATE\\s+(?:OR\\s+(?:REPLACE|ALTER)\\s+)?(?:PROCEDURE|FUNCTION|PROC|MACRO)\\s+(?:[\\w$.]+\\.)?|REPLACE\\s+(?:PROCEDURE|FUNCTION|MACRO)\\s+(?:[\\w$.]+\\.)?|^\\s*(?:PROCEDURE|FUNCTION)\\s+)([\\w$]+)",
+    "end_pattern": "(?:END\\s+[\\w$]*\\s*;\\s*$|^\\s*/\\s*$|^\\s*GO\\s*$|^\\s*\\.ET\\s*$)",
+    "statement_terminator": "(?:^\\s*/\\s*$|^\\s*GO\\s*$|^\\s*\\.ET\\s*$|^\\s*@\\s*$)",
+    "name_capture_group": 1
+  },
+  "cursor_pattern": "\\bCURSOR\\b|\\bDECLARE\\s+\\w+\\s+CURSOR\\b",
+  "exception_pattern": "\\b(?:EXCEPTION|DECLARE\\s+(?:CONTINUE|EXIT)\\s+HANDLER|BEGIN\\s+TRY|BEGIN\\s+CATCH|SIGNAL)\\b",
+  "transaction_patterns": {
+    "begin": "\\bBEGIN\\b(?:\\s+TRANSACTION|\\s+WORK|\\s+REQUEST|\\s+ATOMIC)?",
+    "commit": "\\bCOMMIT\\b(?:\\s+WORK)?|\\bEND\\s+TRANSACTION\\b",
+    "rollback": "\\bROLLBACK\\b(?:\\s+WORK)?|\\bABORT\\b",
+    "end_block": "\\bEND\\b"
+  },
+  "dynamic_sql_patterns": [
+    "EXECUTE\\s+IMMEDIATE",
+    "EXEC(?:UTE)?\\s+SP_EXECUTESQL",
+    "PREPARE\\s+\\w+\\s+FROM",
+    "CALL\\s+EXECUTE"
+  ],
+  "dialect_functions": [],
+  "trino_mappings": {
+    "NVL": "COALESCE",
+    "DECODE": "CASE WHEN ... END",
+    "ISNULL": "COALESCE",
+    "IFNULL": "COALESCE",
+    "VALUE": "COALESCE",
+    "ZEROIFNULL": "COALESCE(x, 0)",
+    "NULLIFZERO": "NULLIF(x, 0)"
+  },
+  "pyspark_mappings": {
+    "NVL": "F.coalesce(col, F.lit(default))",
+    "ISNULL": "F.coalesce(col, F.lit(default))",
+    "IFNULL": "F.coalesce(col, F.lit(default))",
+    "VALUE": "F.coalesce(col, F.lit(default))"
+  },
+  "unsupported_constructs": [],
+  "temp_table_pattern": "(?:^#|^##|\\bTMP_|\\bTEMP_|\\bGTT_|SESSION\\.)",
+  "confidence": 0.3,
+  "hand_crafted": true,
+  "generated_at": "2026-03-29T00:00:00Z",
+  "validated": true,
+  "type_mappings": {
+    "INT": "INTEGER",
+    "INTEGER": "INTEGER",
+    "BIGINT": "BIGINT",
+    "SMALLINT": "SMALLINT",
+    "TINYINT": "TINYINT",
+    "DECIMAL": "DECIMAL",
+    "NUMERIC": "DECIMAL",
+    "FLOAT": "DOUBLE",
+    "DOUBLE": "DOUBLE",
+    "REAL": "REAL",
+    "VARCHAR": "VARCHAR",
+    "CHAR": "CHAR",
+    "TEXT": "VARCHAR",
+    "CLOB": "VARCHAR",
+    "BLOB": "VARBINARY",
+    "BINARY": "VARBINARY",
+    "VARBINARY": "VARBINARY",
+    "DATE": "DATE",
+    "TIME": "TIME",
+    "TIMESTAMP": "TIMESTAMP",
+    "BOOLEAN": "BOOLEAN",
+    "JSON": "JSON"
+  }
+}

@@ -1,0 +1,196 @@
+/* ══════════════════════════════════════════════════════════════════════════════
+   Migration Accelerator v10 — HDFC-inspired theme
+   Strategy: base=dark, secondaryBackgroundColor=#FFFFFF (white widget cards),
+   backgroundColor=#1B2838 (dark page), [theme.sidebar] for dark sidebar.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500&display=swap');
+
+/* ── Shiny background glow ───────────────────────────────── */
+.stApp {
+    font-family: 'DM Sans', system-ui, -apple-system, sans-serif !important;
+    background-image:
+        radial-gradient(ellipse 70% 50% at 50% -5%, rgba(108,92,231,0.09) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 35% at 85% 5%, rgba(80,120,200,0.06) 0%, transparent 50%) !important;
+}
+
+/* ── Text inside white widget containers should be dark ──── */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    color: #1B2838;
+}
+[data-testid="stVerticalBlockBorderWrapper"] label,
+[data-testid="stVerticalBlockBorderWrapper"] .stMarkdown p {
+    color: #5A6577 !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] h1,
+[data-testid="stVerticalBlockBorderWrapper"] h2,
+[data-testid="stVerticalBlockBorderWrapper"] h3 {
+    color: #1B2838 !important;
+}
+
+/* ── Inputs inside white containers: light grey bg ───────── */
+[data-testid="stVerticalBlockBorderWrapper"] input,
+[data-testid="stVerticalBlockBorderWrapper"] textarea {
+    background: #F8FAFC !important;
+    border-color: #E2E8F0 !important;
+    color: #1B2838 !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] input:focus,
+[data-testid="stVerticalBlockBorderWrapper"] textarea:focus {
+    border-color: #6C5CE7 !important;
+    box-shadow: 0 0 0 3px rgba(108,92,231,0.1) !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] [data-baseweb="select"] > div {
+    background: #F8FAFC !important;
+    border-color: #E2E8F0 !important;
+    color: #1B2838 !important;
+}
+
+/* ── File uploader inside white containers ────────────────── */
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stFileUploader"] section {
+    border: 1.5px dashed #D4DAE3 !important;
+    background: #FAFBFC !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stFileUploader"] section:hover {
+    border-color: #6C5CE7 !important;
+    background: #F8F7FF !important;
+}
+
+/* ── White card containers: shadow + radius ──────────────── */
+[data-testid="stVerticalBlockBorderWrapper"] > div {
+    border-radius: 14px !important;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.10) !important;
+}
+
+/* ── Expanders: white card look ──────────────────────────── */
+[data-testid="stExpander"] {
+    border-radius: 14px !important;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08) !important;
+}
+.streamlit-expanderHeader {
+    font-size: 14px !important;
+    font-weight: 500 !important;
+}
+
+/* ── Section headers on dark bg ──────────────────────────── */
+.section-hdr {
+    font-size: 11px; font-weight: 700; color: #7D8590;
+    letter-spacing: 1.5px; text-transform: uppercase;
+    margin: 16px 0 8px 0;
+}
+
+/* ── Brand avatar (MA logo, SK icon) ─────────────────────── */
+.brand-avatar {
+    width: 34px; height: 34px; border-radius: 10px;
+    background: linear-gradient(135deg, #7C6CF0 0%, #5545D0 100%);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 500; color: #fff;
+    letter-spacing: -0.5px; flex-shrink: 0;
+}
+.user-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: linear-gradient(135deg, #7C6CF0 0%, #5545D0 100%);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 500; color: #fff;
+    box-shadow: 0 2px 8px rgba(108,92,231,0.3);
+}
+.top-bar {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 10px; margin-bottom: -8px;
+}
+.top-bar .user-name {
+    font-size: 12px; color: rgba(255,255,255,0.4);
+}
+
+/* ── Sidebar brand block ─────────────────────────────────── */
+.sidebar-brand {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 12px;
+}
+.sidebar-brand-text {
+    font-size: 14px; font-weight: 500; color: #E8ECF2;
+    line-height: 1.2;
+}
+.sidebar-brand-sub {
+    font-size: 9px; color: rgba(255,255,255,0.25);
+    letter-spacing: 0.6px;
+}
+
+/* ── Primary button — shiny gradient ─────────────────────── */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="stBaseButton-primary"] {
+    background: linear-gradient(135deg, #7C6CF0 0%, #5545D0 100%) !important;
+    border: none !important;
+    box-shadow: 0 4px 16px rgba(108,92,231,0.35) !important;
+    color: #fff !important;
+    border-radius: 9px !important;
+    font-weight: 500 !important;
+    transition: all 0.2s !important;
+    position: relative;
+    overflow: hidden;
+}
+.stButton > button[kind="primary"]::before,
+.stButton > button[data-testid="stBaseButton-primary"]::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 50%;
+    background: linear-gradient(180deg, rgba(255,255,255,0.12) 0%, transparent 100%);
+    pointer-events: none;
+}
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="stBaseButton-primary"]:hover {
+    box-shadow: 0 6px 24px rgba(108,92,231,0.5) !important;
+    transform: translateY(-1px);
+}
+
+/* ── Regular + download buttons ──────────────────────────── */
+.stDownloadButton > button {
+    border-radius: 7px !important;
+    font-size: 12px !important;
+}
+
+/* ── Metrics on dark bg ──────────────────────────────────── */
+[data-testid="stMetric"] {
+    background: #1E2A3A !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+}
+[data-testid="stMetric"] label { color: #7D8590 !important; }
+[data-testid="stMetric"] [data-testid="stMetricValue"] { color: #E8ECF2 !important; }
+
+/* ── Tabs ────────────────────────────────────────────────── */
+.stTabs [data-baseweb="tab-list"] { border-bottom: 2px solid rgba(255,255,255,0.06); }
+.stTabs [data-baseweb="tab"] { color: #7D8590 !important; font-size: 13px; }
+.stTabs [aria-selected="true"] { color: #6C5CE7 !important; border-bottom-color: #6C5CE7 !important; }
+
+/* ── Card classes for inline HTML ────────────────────────── */
+.card {
+    background: #1E2A3A; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; padding: 16px 20px; margin-bottom: 12px;
+}
+.card-accent {
+    background: #1E2A3A; border-left: 3px solid #6C5CE7;
+    border-radius: 0 12px 12px 0;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    border-right: 1px solid rgba(255,255,255,0.08);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    padding: 12px 16px; margin-bottom: 8px;
+}
+.step-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-radius: 6px;
+    background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 4px; font-size: 13px;
+}
+.mono-sm { font-family: monospace; font-size: 12px; color: #7D8590; }
+.metric-lbl { font-size: 11px; color: #7D8590; text-transform: uppercase; letter-spacing: 1px; }
+.metric-val { font-size: 28px; font-weight: 800; line-height: 1.1; }
+
+/* ── Progress bar ────────────────────────────────────────── */
+.prog-track { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: #243346; }
+
+/* ── Misc ────────────────────────────────────────────────── */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+.stDeployButton {display:none;}

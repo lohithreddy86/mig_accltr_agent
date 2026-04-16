@@ -1,0 +1,144 @@
+# =============================================================================
+# SQL Migration System — .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# -----------------------------------------------------------------------------
+# Secrets & Environment  (NEVER COMMIT)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+config/.env
+config/.env.*
+!config/.env.example
+
+# Cloud / vendor credentials (extra safety)
+**/credentials.json
+**/credentials.yaml
+**/service-account*.json
+*.pem
+*.key
+!**/PLSQLProcedure*.tokens   # ANTLR token tables look like *.key sometimes — keep these
+
+# -----------------------------------------------------------------------------
+# Artifacts (generated per-run — never commit)
+# -----------------------------------------------------------------------------
+artifacts/
+logs/
+jobs/
+debug/
+
+# Top-level runtime logs that the app writes
+errors.txt
+logs.txt
+
+# -----------------------------------------------------------------------------
+# Caches
+# -----------------------------------------------------------------------------
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# -----------------------------------------------------------------------------
+# Sandbox / containers
+# -----------------------------------------------------------------------------
+*.tar
+*.tar.gz
+sandbox_tmp/
+
+# -----------------------------------------------------------------------------
+# Large infrastructure binaries  (download from Maven instead — see infrastructure/README.md)
+# These exceed GitHub's 100 MB single-file limit.
+# -----------------------------------------------------------------------------
+infrastructure/hive-metastore/jars/*.jar
+!infrastructure/hive-metastore/jars/README.md
+
+# Other large binary blobs that should not live in git
+*.iso
+*.dmg
+*.7z
+
+# -----------------------------------------------------------------------------
+# Data files (often big; commit deliberately if you need them)
+# Comment-out the lines below if you DO want to commit sample data.
+# -----------------------------------------------------------------------------
+*.parquet
+*.orc
+*.avro
+
+# Sensitive / customer-supplied SQL inputs that should not live in a public repo
+inputs/Oracle_psql.sql
+
+# Internal run journal — contains debugging history, partial key prefixes,
+# and run-specific paths; not meant for the shared repo
+Run_tracker.md
+
+# Claude Code project context file — internal working notes, not for the public repo
+CLAUDE.md
+
+# Backup directories created during migration scripts
+*_BACKUP_*/
+*_backup_*/
+
+# -----------------------------------------------------------------------------
+# IDE / Editor
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# -----------------------------------------------------------------------------
+# Logs (all variants — runtime output, stderr captures, rotated files)
+# -----------------------------------------------------------------------------
+*.log
+*.log.*
+*.out
+*.err
+*.stderr
+*.stdout
+log/
+Logs/
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+/tmp/
+*.bak
+*.orig

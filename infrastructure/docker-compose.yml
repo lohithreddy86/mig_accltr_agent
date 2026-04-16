@@ -1,0 +1,162 @@
+# =============================================================================
+# Local Trino lakehouse stack for the SQL migration accelerator
+#
+# Brings up:
+#   - hive-metastore-db   (Postgres 15, backing store for Hive Metastore)
+#   - hive-metastore      (Apache Hive 4 standalone metastore on :9083)
+#   - minio-init          (one-shot: creates buckets in the EXISTING minio container)
+#   - trino               (Trino coordinator + worker, single-node, on :8080)
+#   - mcp-trino           (MCP server for Trino, on :8000)
+#
+# Reuses the EXISTING `minio` container (already running on udemy-airflow's
+# `udemy-airflow_75ad9c_ndsnet` network). We attach to that network so the
+# new services can reach minio by DNS name `minio`.
+#
+# Bring up:    docker compose -f infrastructure/docker-compose.yml up -d
+# Tear down:   docker compose -f infrastructure/docker-compose.yml down
+# Logs:        docker compose -f infrastructure/docker-compose.yml logs -f trino
+# =============================================================================
+
+name: migration-lakehouse
+
+networks:
+  migration_net:
+    driver: bridge
+  shared_minio:
+    name: udemy-airflow_75ad9c_ndsnet     # existing network minio is on
+    external: true
+
+volumes:
+  hive_metastore_db_data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Postgres backend for the Hive Metastore
+  # ---------------------------------------------------------------------------
+  hive-metastore-db:
+    image: postgres:15-alpine
+    container_name: hive-metastore-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metastore
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hive
+    volumes:
+      - hive_metastore_db_data:/var/lib/postgresql/data
+    networks: [migration_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # Apache Hive 4 standalone metastore (Thrift on :9083)
+  # Initialises schema on first start via schematool (DB_DRIVER=postgres).
+  # S3A configured to point at the EXISTING minio container.
+  # ---------------------------------------------------------------------------
+  hive-metastore:
+    image: apache/hive:4.0.1
+    container_name: hive-metastore
+    restart: unless-stopped
+    depends_on:
+      hive-metastore-db:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      # Add hadoop-aws + aws-sdk to the classpath so the metastore can
+      # create / verify s3:// locations against MinIO.
+      HIVE_AUX_JARS_PATH: /opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.3.6.jar,/opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.12.367.jar
+      HADOOP_CLASSPATH: /opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.3.6.jar:/opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.12.367.jar
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://hive-metastore-db:5432/metastore
+        -Djavax.jdo.option.ConnectionUserName=hive
+        -Djavax.jdo.option.ConnectionPassword=hive
+    volumes:
+      - ./hive-metastore/conf/hive-site.xml:/opt/hive/conf/hive-site.xml:ro
+      - ./hive-metastore/jars/postgresql.jar:/opt/hive/lib/postgresql.jar:ro
+      - ./hive-metastore/jars/hadoop-aws-3.3.6.jar:/opt/hive/lib/hadoop-aws-3.3.6.jar:ro
+      - ./hive-metastore/jars/aws-java-sdk-bundle-1.12.367.jar:/opt/hive/lib/aws-java-sdk-bundle-1.12.367.jar:ro
+    ports:
+      - "9083:9083"
+    networks:
+      - migration_net
+      - shared_minio
+
+  # ---------------------------------------------------------------------------
+  # One-shot: create the two MinIO buckets that back the Trino catalogs.
+  # Uses the official `mc` image; talks to the existing minio over its
+  # network. Exits 0 once buckets exist.
+  # ---------------------------------------------------------------------------
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on: []
+    networks: [shared_minio]
+    entrypoint: >
+      /bin/sh -c "
+      set -e;
+      until /usr/bin/mc alias set local http://minio:9000 minio minio123 >/dev/null 2>&1; do
+        echo 'waiting for minio...'; sleep 2;
+      done;
+      /usr/bin/mc mb -p local/lz-lakehouse || true;
+      /usr/bin/mc mb -p local/oracle-homeloans || true;
+      /usr/bin/mc anonymous set none local/lz-lakehouse;
+      /usr/bin/mc anonymous set none local/oracle-homeloans;
+      echo 'buckets ready:'; /usr/bin/mc ls local;
+      "
+
+  # ---------------------------------------------------------------------------
+  # Trino coordinator (single-node). Mounts catalog property files for
+  # `lz_lakehouse` and `oracle_homeloans`. Reuses the existing image.
+  # ---------------------------------------------------------------------------
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    restart: unless-stopped
+    depends_on:
+      hive-metastore:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+    networks:
+      - migration_net
+      - shared_minio
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info | grep -q '\"starting\":false'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # MCP server for Trino (HTTP/SSE on :8000).
+  # Used by the migration accelerator's mcp_client.py.
+  # ---------------------------------------------------------------------------
+  mcp-trino:
+    image: ghcr.io/tuannvm/mcp-trino:latest
+    container_name: mcp-trino
+    restart: unless-stopped
+    depends_on:
+      trino:
+        condition: service_healthy
+    environment:
+      TRINO_HOST: trino
+      TRINO_PORT: "8080"
+      TRINO_SCHEME: http
+      TRINO_USER: admin
+      TRINO_CATALOG: lz_lakehouse
+      TRINO_SCHEMA: lm_target_schema
+      MCP_TRANSPORT: http
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8000"
+    ports:
+      - "8000:8000"
+    networks: [migration_net]

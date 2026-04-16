@@ -1,0 +1,86 @@
+# =============================================================================
+# sql-migration-sandbox — Podman container for all sandbox script execution
+#
+# Build:
+#   podman build -t sql-migration-sandbox:latest -f Dockerfile.sandbox .
+#
+# What runs inside this container:
+#   - sandbox_scripts/extraction/*.py   (Analysis, Detection, Planning, Conversion)
+#   - sandbox_scripts/conversion/*.py   (Conversion validation + assembly)
+#   - sandbox_scripts/validation/*.py   (Dry-run execution against local Spark)
+#
+# Key packages:
+#   - pyspark 3.5     — local Spark for validation dry-runs
+#   - sqlglot 25+     — SQL parsing / dialect transpilation
+#   - sqlparse        — tokenisation
+#   - networkx        — dependency graph + topological sort
+#   - pandas + pyarrow — sample data parquet I/O
+#   - python-docx     — README.docx parsing
+#   - java 11         — required by PySpark
+# =============================================================================
+
+FROM python:3.11-slim-bookworm
+
+# ── System deps ───────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless \
+        curl \
+        && rm -rf /var/lib/apt/lists/* \
+        && ln -sfn $(dirname $(dirname $(readlink -f $(which java)))) /usr/lib/jvm/default-jvm
+
+ENV JAVA_HOME=/usr/lib/jvm/default-jvm
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# ── Python packages ───────────────────────────────────────────────────────────
+COPY pyproject.toml /tmp/pyproject.toml
+
+RUN pip install --no-cache-dir \
+    # SQL parsing
+    sqlglot==25.34.1 \
+    sqlparse==0.5.3 \
+    # Graph algorithms
+    networkx==3.4.2 \
+    # Data I/O
+    pandas==2.2.3 \
+    pyarrow==17.0.0 \
+    # PySpark (local Spark for validation)
+    pyspark==3.5.4 \
+    # Document parsing
+    python-docx==1.1.2 \
+    # Config / serialisation
+    pydantic==2.10.6 \
+    pyyaml==6.0.2 \
+    # HTTP (for any outbound calls in future)
+    httpx==0.27.0 \
+    # Utilities
+    tenacity==8.5.0
+
+# ── Spark configuration ───────────────────────────────────────────────────────
+ENV PYSPARK_PYTHON=python3
+ENV SPARK_LOCAL_DIRS=/tmp/spark_local
+ENV SPARK_DRIVER_MEMORY=2g
+# Spark 3.5 on Java 17 needs these module-opens flags or the JVM refuses to
+# let py4j set up reflection, dying with "Java gateway exited before sending
+# its port number". JDK_JAVA_OPTIONS is picked up automatically by every JVM
+# the container spawns (driver, executor, py4j side-channel).
+ENV JDK_JAVA_OPTIONS="--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED --add-opens=java.security.jgss/sun.security.krb5=ALL-UNNAMED"
+RUN mkdir -p /tmp/spark_local && chmod 1777 /tmp/spark_local
+
+# ── Sandbox scripts ───────────────────────────────────────────────────────────
+# Mounted at /scripts (read-only) at runtime — not baked into the image
+# so the scripts can be updated without rebuilding the container.
+RUN mkdir -p /scripts /artifacts /source
+
+# ── Non-root user ─────────────────────────────────────────────────────────────
+RUN useradd -m -u 1001 sandbox
+USER sandbox
+WORKDIR /home/sandbox
+
+# ── Health check ─────────────────────────────────────────────────────────────
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python3 -c "import sqlglot, networkx, pandas, pyspark; print('ok')" || exit 1
+
+# sandbox.py prepends `python3 <script> --args …` itself, so we leave the
+# entrypoint empty (would otherwise become `python3 python3 …`).
+ENTRYPOINT []
+CMD ["python3"]
