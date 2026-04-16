@@ -1862,14 +1862,22 @@ When you are done testing and satisfied, return ONLY the final SQL in a ```sql c
             flags=re.IGNORECASE,
         )
 
-        # CREATE TABLE … AS
+        # CREATE TABLE … AS  (mirror the _replace_target / _replace_df_target
+        # pattern above so the raw regex stays OUT of the f-string expression
+        # — Python 3.10/3.11 reject backslashes inside f-string braces).
+        def _replace_ctas_target(m: "re.Match[str]") -> str:
+            head, raw_name, tail = m.group(1), m.group(2), m.group(3)
+            stripped = re.sub(r"@[\w$]+$", "", raw_name)
+            tgt = (
+                name_map.get(stripped.lower())
+                or name_map.get(stripped.split(".")[-1].lower())
+                or raw_name
+            )
+            return f"{head} {tgt}{tail}"
+
         code = re.sub(
             r"(CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+([\w\.]+(?:@[\w$]+)?)(\s+AS\b)",
-            lambda m: (
-                f"{m.group(1)} "
-                f"{name_map.get(re.sub(r'@[\w$]+$', '', m.group(2)).lower(), None) or name_map.get(re.sub(r'@[\w$]+$', '', m.group(2)).split('.')[-1].lower(), m.group(2))}"
-                f"{m.group(3)}"
-            ),
+            _replace_ctas_target,
             code,
             flags=re.IGNORECASE,
         )
