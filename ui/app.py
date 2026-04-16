@@ -371,7 +371,7 @@ def page_artifacts():
 # ENTRY POINT
 # ══════════════════════════════════════════════════════════════════════════════
 ui.run(
-    port=8080,
+    port=8082,
     title="Migration Accelerator",
     favicon="⚙",
     dark=True,

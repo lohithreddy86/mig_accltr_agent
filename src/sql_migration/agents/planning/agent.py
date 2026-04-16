@@ -918,6 +918,15 @@ class PlanningAgent:
             strategy_entry = strategy_map.get(proc.name)
             strategy = strategy_entry.strategy if strategy_entry else ConversionStrategy.TRINO_SQL
 
+            # Pre-compute the per-proc table list so every single-chunk
+            # branch below carries it. Without this, `chunk.tables` stays
+            # empty and P3 has nothing to look up → no schema_context, no
+            # target_context, no target-catalog write routing.
+            proc_tables = list({
+                *(proc.tables_read or []),
+                *(proc.tables_written or []),
+            })
+
             # MANUAL_SKELETON: always single chunk (scaffolded with TODOs)
             if strategy == ConversionStrategy.MANUAL_SKELETON:
                 chunk_plan.procs[proc.name] = ProcChunkPlan(
@@ -927,6 +936,7 @@ class PlanningAgent:
                         start_line=proc.start_line,
                         end_line=proc.end_line,
                         line_count=proc.line_count,
+                        tables=proc_tables,
                     )],
                     is_single_chunk=True,
                 )
@@ -941,6 +951,7 @@ class PlanningAgent:
                         start_line=proc.start_line,
                         end_line=proc.end_line,
                         line_count=proc.line_count,
+                        tables=proc_tables,
                     )],
                     is_single_chunk=True,
                 )
@@ -972,6 +983,7 @@ class PlanningAgent:
                         start_line=proc.start_line,
                         end_line=proc.end_line,
                         line_count=proc.line_count,
+                        tables=proc_tables,
                     )],
                     is_single_chunk=True,
                 )
@@ -985,6 +997,10 @@ class PlanningAgent:
                     end_line=c["end_line"],
                     line_count=c["line_count"],
                     state_vars=c.get("state_vars", {}),
+                    # Per-chunk tables if the sandbox emitted them; otherwise
+                    # fall back to the proc-level list so P3 still has
+                    # schema + target context to work with.
+                    tables=c.get("tables") or proc_tables,
                 )
                 for c in data.get("chunks", [])
             ]
@@ -1074,6 +1090,26 @@ class PlanningAgent:
                         schema_ctx[table_src] = result
 
                 chunk.schema_context = schema_ctx
+
+                # Target-catalog routing: for each write-role table the chunk
+                # touches, record the allow-listed target FQN so the
+                # Conversion Agent can emit `TARGET TABLE LOCATIONS` in the
+                # prompt and C3 can enforce the write allow-list.
+                target_ctx: dict[str, Any] = {}
+                for table_src in chunk.tables or []:
+                    entry = table_registry.get(table_src)
+                    if not entry or not getattr(entry, "target_fqn", ""):
+                        continue
+                    if getattr(entry, "role", "source") in ("target", "both"):
+                        target_ctx[table_src] = {
+                            "target_fqn":    entry.target_fqn,
+                            "source_fqn":    entry.source_fqn or entry.trino_fqn,
+                            "role":          entry.role,
+                            "target_status": getattr(entry, "target_status", "SKIPPED"),
+                            "columns":       [c.name for c in entry.columns],
+                            "types":         {c.name: c.type for c in entry.columns},
+                        }
+                chunk.target_context = target_ctx
 
         if schema_cache:
             log.info("p3_schema_cache_stats",
@@ -1234,6 +1270,7 @@ class PlanningAgent:
                         state_vars=cumulative_state_vars.copy(),
                         schema_context=chunk.schema_context or {},
                         construct_hints=hints,
+                        target_context=getattr(chunk, "target_context", {}) or {},
                     )
                     enriched_chunks.append(enriched)
                     cumulative_state_vars.update(chunk.state_vars or {})
@@ -1323,6 +1360,7 @@ class PlanningAgent:
                     state_vars=cumulative_state_vars.copy(),
                     schema_context=chunk.schema_context or {},
                     construct_hints=hints,
+                    target_context=getattr(chunk, "target_context", {}) or {},
                 )
                 enriched_chunks.append(enriched)
                 cumulative_state_vars.update(chunk.state_vars or {})

@@ -101,13 +101,27 @@ class ColumnInfo(BaseModel):
     comment:  str  = ""
 
 
+class TargetTableSpec(BaseModel):
+    """Where a write-role table should be materialised in the target catalog."""
+    source_name: str                               # original Oracle name, e.g. "Mis.Lac_Mis_Archive"
+    target_fqn:  str                               # e.g. "lz_lakehouse.lm_target_schema.lac_mis_archive"
+    columns:     list[ColumnInfo] = Field(default_factory=list)
+    status:      str = "SKIPPED"                   # EXISTS | NEEDS_CREATE | CREATED | SKIPPED
+
+
 class TableRegistryEntry(BaseModel):
     source_name:  str
-    trino_fqn:    str        = ""
+    trino_fqn:    str        = ""                  # back-compat: alias of source_fqn
     status:       TableStatus
     columns:      list[ColumnInfo] = Field(default_factory=list)
     is_temp:      bool        = False
-    row_count:    int | None  = None   # Populated during Validation
+    row_count:    int | None  = None               # Populated during Validation
+
+    # Target-catalog routing (populated by A3 when output_catalog/schema are set)
+    role:          str = "source"                  # source | target | both
+    source_fqn:    str = ""                        # explicit read-side FQN
+    target_fqn:    str = ""                        # explicit write-side FQN
+    target_status: str = "SKIPPED"                 # EXISTS | NEEDS_CREATE | CREATED | SKIPPED
 
 
 class ChunkInfo(BaseModel):
@@ -119,6 +133,9 @@ class ChunkInfo(BaseModel):
     state_vars:      dict[str, str] = Field(default_factory=dict)
     schema_context:  dict[str, Any] = Field(default_factory=dict)
     construct_hints: dict[str, str] = Field(default_factory=dict)
+    # Target-catalog routing: for every write-role table the chunk touches,
+    # the allow-listed target FQN the LLM must use.
+    target_context:  dict[str, Any] = Field(default_factory=dict)
 
 
 class LoopGuards(BaseModel):

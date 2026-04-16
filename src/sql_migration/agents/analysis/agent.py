@@ -303,6 +303,8 @@ class AnalysisAgent:
             output_format=cfg.output_format,
             input_catalog=cfg.input_catalog,
             input_schema=cfg.input_schemas,
+            output_catalog=cfg.output_catalog,
+            output_schema=cfg.output_schemas,
             udf_implementations=udf_impls,
             quality_score=1.0,
         )
@@ -1350,6 +1352,9 @@ ADAPTER DIALECT FUNCTIONS (these are known, not unresolved):
             temp_table_pattern=dialect_profile.temp_table_pattern,
             input_catalog=dialect_profile.input_catalog,
             input_schemas=dialect_profile.input_schema,
+            output_catalog=getattr(dialect_profile, "output_catalog", ""),
+            output_schemas=getattr(dialect_profile, "output_schema", []),
+            proc_analyses=proc_analyses,
         )
 
     # =========================================================================
@@ -1712,6 +1717,9 @@ ADAPTER DIALECT FUNCTIONS (these are known, not unresolved):
             all_tables, dialect_profile.table_mapping, dialect_profile.temp_table_pattern,
             input_catalog=dialect_profile.input_catalog,
             input_schemas=dialect_profile.input_schema,
+            output_catalog=getattr(dialect_profile, "output_catalog", ""),
+            output_schemas=getattr(dialect_profile, "output_schema", []),
+            # regex-fallback path has no per-proc analyses; role stays "source"
         )
         self.store.write("analysis", "table_registry.json", table_registry.model_dump())
 
@@ -1818,12 +1826,68 @@ ADAPTER DIALECT FUNCTIONS (these are known, not unresolved):
     def _a2_resolve_tables(
         self, all_tables, table_mapping, temp_table_pattern,
         input_catalog="", input_schemas=None,
+        output_catalog="", output_schemas=None,
+        proc_analyses=None,
     ) -> TableRegistry:
-        """Resolve every table against Trino MCP."""
+        """Resolve every table against Trino MCP.
+
+        When `output_catalog` + `output_schemas` are provided, also compute a
+        `target_fqn` for every REAL_TABLE whose aggregated role (across all
+        proc analyses) includes a write. `trino_fqn` / `source_fqn` continue
+        to refer to the source-catalog location; `target_fqn` is the routed
+        write destination (e.g. `lz_lakehouse.lm_target_schema.foo`).
+        """
         import re
         registry = TableRegistry()
         temp_re = re.compile(temp_table_pattern, re.IGNORECASE) if temp_table_pattern else None
         schemas = input_schemas or []
+        out_schemas = output_schemas or []
+        target_schema = out_schemas[0] if out_schemas else ""
+        # Pre-compute role per source table from the A2 per-proc analyses.
+        # TEMP_TABLE is also included because staging tables (TRUNCATE +
+        # INSERT patterns) are frequently mis-classified by the LLM but
+        # still represent physical writes that need target-catalog routing.
+        # CTE_ALIAS / VARIABLE / VIEW / CURSOR_NAME / SYSTEM_DUMMY stay out.
+        _routable_classifications = {"REAL_TABLE", "TEMP_TABLE"}
+        role_map: dict[str, str] = {}
+        if proc_analyses:
+            for pa in proc_analyses:
+                for t in getattr(pa, "tables", []) or []:
+                    if getattr(t, "classification", "") not in _routable_classifications:
+                        continue
+                    key = getattr(t, "name", "").lower()
+                    if not key:
+                        continue
+                    ua = (getattr(t, "used_as", "read") or "read").lower()
+                    prior = role_map.get(key, "")
+                    if prior == "both" or ua == "both":
+                        role_map[key] = "both"
+                    elif prior == "write" and ua == "read":
+                        role_map[key] = "both"
+                    elif prior == "read" and ua == "write":
+                        role_map[key] = "both"
+                    elif ua == "write":
+                        role_map[key] = "write" if prior in ("", "write") else "both"
+                    else:
+                        role_map[key] = prior or "read"
+
+        def _target_fqn_for(source_name: str) -> str:
+            if not (output_catalog and target_schema):
+                return ""
+            bare = source_name.split(".")[-1]
+            mapped = (table_mapping.get(bare.upper(), bare)
+                       if bare else bare).lower()
+            # strip any leftover schema qualifier from table_mapping values
+            mapped = mapped.split(".")[-1]
+            return f"{output_catalog}.{target_schema}.{mapped}"
+
+        def _role_for(source_name: str) -> str:
+            ua = role_map.get(source_name.lower(), "read")
+            if ua == "write":
+                return "target"
+            if ua == "both":
+                return "both"
+            return "source"
 
         for source_name in all_tables:
             source_upper = source_name.strip().upper()
@@ -1834,6 +1898,8 @@ ADAPTER DIALECT FUNCTIONS (these are known, not unresolved):
                 registry.entries[source_name] = TableRegistryEntry(
                     source_name=source_name, trino_fqn=trino_name,
                     status=TableStatus.TEMP_TABLE, is_temp=True,
+                    role=_role_for(source_name),
+                    source_fqn=trino_name,
                 )
                 continue
 
@@ -1870,6 +1936,16 @@ ADAPTER DIALECT FUNCTIONS (these are known, not unresolved):
                 available = self.mcp.list_tables(schema=schema_to_query)
                 available_lower = [t.lower() for t in available]
 
+                role = _role_for(source_name)
+                tgt_fqn = _target_fqn_for(source_name) if role in ("target", "both") else ""
+                tgt_status = "SKIPPED"
+                if tgt_fqn:
+                    try:
+                        tgt_cols = self.mcp.desc_table(table=tgt_fqn)
+                        tgt_status = "EXISTS" if tgt_cols else "NEEDS_CREATE"
+                    except Exception:
+                        tgt_status = "NEEDS_CREATE"
+
                 if table.lower() in available_lower:
                     cols_raw = self.mcp.desc_table(table=fqn)
                     columns = [
@@ -1884,17 +1960,24 @@ ADAPTER DIALECT FUNCTIONS (these are known, not unresolved):
                     registry.entries[source_name] = TableRegistryEntry(
                         source_name=source_name, trino_fqn=fqn,
                         status=TableStatus.EXISTS_IN_TRINO, columns=columns,
+                        role=role, source_fqn=fqn,
+                        target_fqn=tgt_fqn, target_status=tgt_status,
                     )
                 else:
                     registry.entries[source_name] = TableRegistryEntry(
                         source_name=source_name, trino_fqn=fqn,
                         status=TableStatus.MISSING,
+                        role=role, source_fqn=fqn,
+                        target_fqn=tgt_fqn, target_status=tgt_status,
                     )
             except Exception as e:
                 log.warning("table_resolution_error", table=source_name, error=str(e))
                 registry.entries[source_name] = TableRegistryEntry(
                     source_name=source_name, trino_fqn=trino_name,
                     status=TableStatus.MISSING,
+                    role=_role_for(source_name),
+                    source_fqn=trino_name,
+                    target_fqn=_target_fqn_for(source_name) if _role_for(source_name) in ("target","both") else "",
                 )
 
         return registry

@@ -137,6 +137,9 @@ class DispatchTask(BaseModel):
     end_line:        int
     strategy:        ConversionStrategy
     schema_context:  dict[str, Any]    = Field(default_factory=dict)
+    # Target-catalog routing allow-list (propagated from ChunkInfo.target_context).
+    # Shape: {source_name: {target_fqn, source_fqn, role, target_status, columns, types}}
+    target_context:  dict[str, Any]    = Field(default_factory=dict)
     construct_hints: dict[str, str]    = Field(default_factory=dict)
     state_vars:      dict[str, str]    = Field(default_factory=dict)
     loop_guards:      LoopGuards        = Field(default_factory=LoopGuards)

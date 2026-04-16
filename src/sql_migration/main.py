@@ -21,8 +21,9 @@ from pathlib import Path
 
 import click
 
-# Make src importable
-_ROOT = Path(__file__).resolve().parents[1]
+# Make src importable. This file lives at src/sql_migration/main.py, so
+# parents[2] is the project root (contains `ui/`, `inputs/`, `artifacts/`).
+_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT / "src"))
 
 from sql_migration.core.artifact_store import ArtifactStore
@@ -80,6 +81,9 @@ def run(run_id, readme, sql, job_config, dry_run, procs):
         schemas = pc_data.get("input_schemas", [])
         if isinstance(schemas, str):
             schemas = [s.strip() for s in schemas.split(",") if s.strip()]
+        out_schemas = pc_data.get("output_schemas", [])
+        if isinstance(out_schemas, str):
+            out_schemas = [s.strip() for s in out_schemas.split(",") if s.strip()]
         pipeline_config = PipelineConfig(
             source_type=pc_data.get("source_type", "stored_procedures"),
             output_format=pc_data.get("output_format", "AUTO"),
@@ -88,6 +92,8 @@ def run(run_id, readme, sql, job_config, dry_run, procs):
             udf_file_path=pc_data.get("udf_file_path", ""),
             input_catalog=pc_data.get("input_catalog", ""),
             input_schemas=schemas,
+            output_catalog=pc_data.get("output_catalog", ""),
+            output_schemas=out_schemas,
         )
 
     # README is optional if pipeline_config is provided (Streamlit UI flow)
@@ -258,16 +264,10 @@ def run(run_id, readme, sql, job_config, dry_run, procs):
 # ─────────────────────────────────────────────────────────────────────────────
 
 @cli.command()
-@click.option("--port", default=8501, help="Streamlit port")
-def ui(port):
-    """Launch the Streamlit monitoring UI."""
+def ui():
+    """Launch the NiceGUI monitoring UI (port 8082, hardcoded in ui/app.py)."""
     ui_path = _ROOT / "ui" / "app.py"
-    click.echo(f"🌐  Launching UI at http://localhost:{port}")
-    # subprocess.run([
-    #     sys.executable, "-m", "streamlit", "run", str(ui_path),
-    #     "--server.port", str(port),
-    #     "--server.headless", "true",
-    # ])
+    click.echo("🌐  Launching UI at http://localhost:8082")
     subprocess.run([sys.executable, str(ui_path)])
 
 

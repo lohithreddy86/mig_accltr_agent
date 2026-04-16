@@ -136,6 +136,18 @@ def build_page():
                         label="Input schemas *", placeholder="core, staging, dw",
                     ).props('hint="Comma-separated"').classes("flex-1")
 
+                # Target (write) catalog + schema. Optional — if blank, falls
+                # back to whatever Section 4.1 of the README specifies. If
+                # both are provided, UI values win (pipeline_config path is
+                # checked before README parsing in agents/analysis/agent.py).
+                with ui.row(wrap=False).classes('w-full gap-4'):
+                    output_catalog = ui.input(
+                        label="Output catalog", placeholder="lz_lakehouse",
+                    ).props('hint="Where migrated writes land"').classes("flex-1")
+                    output_schemas = ui.input(
+                        label="Output schemas", placeholder="lm_target_schema",
+                    ).props('hint="Comma-separated"').classes("flex-1")
+
                 # SQL upload
                 ui.html('<div class="uz-l">Source files *</div>').classes('w-full')
                 sql_status = ui.html('').classes('w-full')
@@ -263,6 +275,7 @@ def build_page():
             sample_paths.append(str(out))
 
         schemas_list = [s.strip() for s in input_schemas.value.split(",") if s.strip()]
+        out_schemas_list = [s.strip() for s in (output_schemas.value or "").split(",") if s.strip()]
         filter_list = [p.strip() for p in (procs_filter.value or "").splitlines() if p.strip()]
 
         job_config = {
@@ -277,6 +290,8 @@ def build_page():
                 "udf_file_path": udf_path,
                 "input_catalog": input_catalog.value.strip(),
                 "input_schemas": schemas_list,
+                "output_catalog": (output_catalog.value or "").strip(),
+                "output_schemas": out_schemas_list,
             },
         }
         (jobs_dir / "job_config.json").write_text(json.dumps(job_config, indent=2))

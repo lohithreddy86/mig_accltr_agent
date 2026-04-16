@@ -420,6 +420,8 @@ class PipelineConfig(BaseModel):
     udf_file_path:     str       = ""                    # path to uploaded .sql/.py/.txt file (optional)
     input_catalog:     str       = ""                    # e.g. "lakehouse"
     input_schemas:     list[str] = Field(default_factory=list)  # e.g. ["core", "staging"]
+    output_catalog:    str       = ""                    # e.g. "lz_lakehouse" — where migrated writes land
+    output_schemas:    list[str] = Field(default_factory=list)  # e.g. ["lm_target_schema"]
 
 
 class AnalysisAgentInput(BaseModel):

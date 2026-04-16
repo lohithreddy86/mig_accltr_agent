@@ -27,7 +27,8 @@ from .interchange import ConversionArtifact, ConversionRoute, TodoItem
 
 def build_repair_prompt(artifact: ConversionArtifact,
                         schema_context: dict[str, Any] | None = None,
-                        oracle_mappings: dict[str, Any] | None = None) -> str:
+                        oracle_mappings: dict[str, Any] | None = None,
+                        target_context: dict[str, Any] | None = None) -> str:
     """Build a focused repair prompt for DETERMINISTIC_THEN_REPAIR route.
 
     The LLM receives the converter's PySpark output with TODO markers and is
@@ -40,6 +41,7 @@ def build_repair_prompt(artifact: ConversionArtifact,
     """
     todo_blocks = _format_todo_blocks(artifact.todos)
     schema_block = _format_schema_context(schema_context) if schema_context else ""
+    target_block = _format_target_context(target_context) if target_context else ""
     mappings_block = _format_oracle_mappings(oracle_mappings) if oracle_mappings else ""
 
     return f"""You are fixing TODO markers in auto-generated PySpark code that was converted from Oracle PL/SQL.
@@ -61,6 +63,7 @@ The deterministic converter has already handled most of the conversion. Your job
 ```
 
 {schema_block}
+{target_block}
 {mappings_block}
 
 ## Rules
@@ -76,7 +79,8 @@ The deterministic converter has already handled most of the conversion. Your job
 def build_full_prompt(artifact: ConversionArtifact,
                       schema_context: dict[str, Any] | None = None,
                       oracle_mappings: dict[str, Any] | None = None,
-                      chunk_code: str = "") -> str:
+                      chunk_code: str = "",
+                      target_context: dict[str, Any] | None = None) -> str:
     """Build a structured prompt for AGENTIC_FULL route.
 
     The converter failed or scored too low, but we still provide pre-transpiled
@@ -93,6 +97,7 @@ def build_full_prompt(artifact: ConversionArtifact,
 
     classifications_block = _format_classifications(artifact.statement_classifications)
     schema_block = _format_schema_context(schema_context) if schema_context else ""
+    target_block = _format_target_context(target_context) if target_context else ""
     mappings_block = _format_oracle_mappings(oracle_mappings) if oracle_mappings else ""
     warnings_block = _format_warnings(artifact.warnings)
 
@@ -118,6 +123,7 @@ to select the correct conversion pattern.
 {classifications_block}
 
 {schema_block}
+{target_block}
 {mappings_block}
 {warnings_block}
 
@@ -130,6 +136,8 @@ to select the correct conversion pattern.
 6. DBMS_STATS.Gather_Table_Stats → spark.sql("ANALYZE TABLE ... COMPUTE STATISTICS")
 7. Correlated UPDATE → MERGE INTO (if not already converted)
 8. FOR cursor_var IN (SELECT ...) LOOP → df = spark.sql(); for row in df.collect():
+9. **Write-target routing (CRITICAL when TARGET TABLE LOCATIONS block is present):**
+   Every INSERT INTO / UPDATE / DELETE FROM / MERGE INTO / CREATE TABLE AS / saveAsTable / insertInto / writeTo target MUST use the exact FQN listed under TARGET TABLE LOCATIONS. Do NOT shorten, substitute, or use bare table names for writes. Read statements keep using the TABLE SCHEMA block's FQNs.
 
 ## Output
 Produce a complete PySpark function. Include all imports at the top.
@@ -187,6 +195,44 @@ def _format_schema_context(schema: dict[str, Any]) -> str:
                     lines.append(f"  - {col.get('name', '?')}: {col.get('type', '?')}")
                 else:
                     lines.append(f"  - {col}")
+    return "\n".join(lines)
+
+
+def _format_target_context(target: dict[str, Any]) -> str:
+    """Format the TARGET TABLE LOCATIONS allow-list for the prompt.
+
+    Expected shape (populated by Planning P3):
+        {source_name: {"target_fqn": "...", "columns": [...], "types": {...},
+                        "role": "target|both", "target_status": "EXISTS|NEEDS_CREATE"}}
+
+    Emits a block the Conversion LLM must obey: every write-verb (INSERT,
+    UPDATE, DELETE, MERGE, CTAS, saveAsTable, insertInto, writeTo) MUST use
+    one of the listed FQNs.
+    """
+    if not target:
+        return ""
+    lines = ["\n## TARGET TABLE LOCATIONS — writes MUST use these FQNs"]
+    for source_name, spec in target.items():
+        if not isinstance(spec, dict):
+            continue
+        tgt = spec.get("target_fqn", "")
+        if not tgt:
+            continue
+        role = spec.get("role", "target")
+        status = spec.get("target_status", "")
+        lines.append(f"\n**{source_name}** → `{tgt}`  (role={role}, status={status})")
+        cols = spec.get("columns") or []
+        types = spec.get("types") or {}
+        if cols:
+            preview = ", ".join(
+                f"{c} {types.get(c, '')}".strip() for c in cols[:12]
+            )
+            lines.append(f"  columns: {preview}")
+    lines.append(
+        "\nEvery INSERT INTO / UPDATE / DELETE FROM / MERGE INTO / CREATE TABLE AS / "
+        "saveAsTable / insertInto / writeTo target in the converted code MUST be one "
+        "of the FQNs above — not the source FQN, not a bare name, not @dblink-suffixed."
+    )
     return "\n".join(lines)
 
 

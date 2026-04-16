@@ -486,17 +486,39 @@ def extract_all_procs(
 def extract_chunk_by_lines(
     source_file: str, start_line: int, end_line: int, schema_context: dict
 ) -> str:
-    """Extract lines[start:end] and annotate table refs with Trino FQNs."""
+    """Extract lines[start:end] and annotate table refs with Trino FQNs.
+
+    If `schema_context[src]` carries `target_fqn`, the table is also annotated
+    with the WRITE destination so the Conversion LLM sees both read/write
+    routing next to the SQL. Example emitted annotation:
+        Mis.Lac_Mis_Archive_Status /*→READ:oracle_homeloans.mis.lac_mis_archive_status
+                                      WRITE:lz_lakehouse.lm_target_schema.lac_mis_archive_status*/
+    """
     path = Path(source_file)
     if not path.exists():
         return ""
     lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     code  = "\n".join(lines[start_line:end_line + 1])
     for src, ctx in (schema_context or {}).items():
-        fqn = ctx.get("trino_fqn", "")
-        if fqn and fqn != src:
-            code = re.sub(r'\b' + re.escape(src) + r'\b',
-                          f"{src}/*→{fqn}*/", code, flags=re.IGNORECASE)
+        read_fqn  = ctx.get("trino_fqn", "")
+        write_fqn = ctx.get("target_fqn", "")
+        if not read_fqn and not write_fqn:
+            continue
+        if read_fqn == src:
+            read_fqn = ""
+        parts = []
+        if read_fqn:
+            parts.append(f"READ:{read_fqn}")
+        if write_fqn:
+            parts.append(f"WRITE:{write_fqn}")
+        if not parts:
+            continue
+        annotation = " ".join(parts)
+        code = re.sub(
+            r'\b' + re.escape(src) + r'\b',
+            f"{src}/*→{annotation}*/",
+            code, flags=re.IGNORECASE,
+        )
     return code
 
 

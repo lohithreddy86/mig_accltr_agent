@@ -47,6 +47,67 @@ from sql_migration.core.mcp_client import MCPClientSync
 log = get_logger("trino_sql_validator")
 
 
+# ---------------------------------------------------------------------------
+# Target-catalog write allow-list validator
+# ---------------------------------------------------------------------------
+
+_WRITE_STMT_RE = re.compile(
+    r"""\b(?:
+        INSERT\s+INTO |
+        UPDATE |
+        DELETE\s+FROM |
+        MERGE\s+INTO |
+        CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:[\w\.]+)\s+AS
+    )\s+([\w\.]+)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_PYSPARK_WRITE_RE = re.compile(
+    r"""\.(?:saveAsTable|insertInto|writeTo)\(\s*["']([\w\.]+)["']""",
+    re.IGNORECASE,
+)
+
+
+def validate_write_targets(code: str,
+                           allowed_fqns: set[str] | list[str]) -> list[str]:
+    """Return a list of violations: write-verb targets that aren't in
+    `allowed_fqns`.
+
+    Covers SQL DML/DDL (INSERT / UPDATE / DELETE / MERGE / CTAS) and PySpark
+    DataFrame writes (saveAsTable / insertInto / writeTo). TRUNCATE is NOT
+    included — it's typically a prep step applied to the source catalog via
+    a pre-existing Oracle habit and gets wrapped in a comment on migration.
+
+    Empty allow-list → no validation (feature disabled when output_catalog
+    isn't set). Comparison is case-insensitive.
+    """
+    if not allowed_fqns:
+        return []
+    allow = {fqn.lower().strip() for fqn in allowed_fqns if fqn}
+    if not allow:
+        return []
+
+    violations: list[str] = []
+
+    for m in _WRITE_STMT_RE.finditer(code):
+        target = m.group(1).strip().rstrip(";,)")
+        if target.lower() not in allow:
+            violations.append(
+                f"Write target `{target}` is not in the target-catalog allow-list "
+                f"(first 5 allowed: {sorted(allow)[:5]})"
+            )
+
+    for m in _PYSPARK_WRITE_RE.finditer(code):
+        target = m.group(1).strip()
+        if target.lower() not in allow:
+            violations.append(
+                f"PySpark write target `{target}` is not in the target-catalog allow-list"
+            )
+
+    return violations
+
+
 @dataclass
 class TrinoValidationResult:
     """Result of direct Trino SQL validation."""

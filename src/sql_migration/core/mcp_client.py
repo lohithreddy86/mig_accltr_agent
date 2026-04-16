@@ -374,6 +374,16 @@ class MCPClientSync:
 
         return normalized
 
+    def desc_target_table(self, target_fqn: str) -> list[dict]:
+        """Same as desc_table but semantically names the call as pointing at
+        the write-side target catalog (e.g. `lz_lakehouse.lm_target_schema.X`).
+
+        Kept as a separate method so call sites in A3/P3/C2 are unambiguous
+        about whether they are probing the SOURCE catalog (reads) or the
+        TARGET catalog (writes).
+        """
+        return self.desc_table(target_fqn)
+
     def run_query(self, query: str) -> list[dict]:
         """
         Execute a read-only SELECT query.

@@ -126,6 +126,12 @@ class ConversionAgent:
         except Exception:
             self._column_analysis = []
 
+        # Full-registry fallback for target-catalog write rewriting. The
+        # Conversion Agent is constructed BEFORE Analysis writes
+        # table_registry.json, so this map starts empty and is populated
+        # lazily on first access via _get_registry_target_map().
+        self._registry_target_map: dict[str, str] | None = None
+
         # Per-proc conversation history for multi-chunk procs
         # Key: proc_name → LLM history list
         # v10: Currently unused — inter-chunk continuity uses state_vars +
@@ -268,6 +274,21 @@ class ConversionAgent:
         test_code = agentic_result.get("test_code", "")
         corrections = agentic_result.get("tool_calls", 0)
 
+        # Target-catalog rewrite on the agentic output too — guarantees
+        # writes land in the target catalog regardless of which path
+        # produced the code. Runs even when per-chunk target_context is
+        # empty so the run-wide registry fallback can catch tables A2
+        # mis-classified (e.g. staging tables flagged TEMP_TABLE).
+        _tgt_ctx_post = getattr(task, "target_context", None) or {}
+        if final_code:
+            _rewritten = self._rewrite_write_targets(final_code, _tgt_ctx_post)
+            if _rewritten != final_code:
+                log.info("agentic_target_rewrite",
+                         proc=proc, chunk=chunk,
+                         chunk_targets=len(_tgt_ctx_post),
+                         registry_targets=len(self._get_registry_target_map()))
+                final_code = _rewritten
+
         # ── Semantic Review with Tier-3 resume-on-retry ──────────────────────
         # Review gate: fast_review (deterministic) → semantic_review (LLM).
         # On failure: targeted_repair (single LLM call, ~10 s) replaces the
@@ -281,8 +302,16 @@ class ConversionAgent:
                                        f"Semantic review round {review_round}...")
             # Tier-2 fast-review gate: skip the ~12 s LLM semantic review when
             # deterministic heuristics confirm statement coverage + no silent
-            # NULL / Oracle remnants.
-            fast = self._fast_review(chunk_code, final_code)
+            # NULL / Oracle remnants. Also enforces target-catalog write FQNs
+            # when task.target_context is populated.
+            tgt_ctx = getattr(task, "target_context", None) or {}
+            allowed_write_fqns = {
+                spec.get("target_fqn", "")
+                for spec in tgt_ctx.values()
+                if isinstance(spec, dict) and spec.get("target_fqn")
+            }
+            fast = self._fast_review(chunk_code, final_code,
+                                      allowed_write_fqns=allowed_write_fqns)
             if not fast["issues_found"]:
                 log.info("fast_review_passed", proc=proc, chunk=chunk,
                          round=review_round)
@@ -517,6 +546,22 @@ class ConversionAgent:
             #         duration_s=time.monotonic() - start_time,
             #     )
             if artifact.route == ConversionRoute.DETERMINISTIC_ACCEPT:
+                # Target-catalog rewrite: rewrite every INSERT/UPDATE/DELETE/
+                # MERGE/CTAS/saveAsTable/insertInto/writeTo target in the
+                # deterministic output. Done BEFORE review so the allow-list
+                # check sees the corrected code. Runs even when per-chunk
+                # target_context is empty so the run-wide registry fallback
+                # catches tables A2 mis-classified.
+                tgt_ctx = getattr(task, "target_context", None) or {}
+                rewritten = self._rewrite_write_targets(
+                    artifact.generated_pyspark, tgt_ctx)
+                if rewritten != artifact.generated_pyspark:
+                    log.info("deterministic_target_rewrite",
+                             proc=proc, chunk=chunk,
+                             chunk_targets=len(tgt_ctx),
+                             registry_targets=len(self._get_registry_target_map()))
+                    artifact.generated_pyspark = rewritten
+
                 # Skip the LLM semantic review for simple, high-confidence
                 # chunks that the deterministic converter handles perfectly.
                 # Saves one LLM round-trip (~10-20 s) per chunk. The review
@@ -556,7 +601,18 @@ class ConversionAgent:
 
                 # Tier-2 fast-review gate: skip the LLM call when deterministic
                 # heuristics already confirm coverage + no Oracle remnants.
-                fast = self._fast_review(chunk_code, artifact.generated_pyspark)
+                # Also enforces target-catalog write allow-list.
+                tgt_ctx = getattr(task, "target_context", None) or {}
+                allowed_write_fqns = {
+                    spec.get("target_fqn", "")
+                    for spec in tgt_ctx.values()
+                    if isinstance(spec, dict) and spec.get("target_fqn")
+                }
+                # Include registry-fallback targets so rewrites backed by the
+                # run-wide registry pass the allow-list check.
+                allowed_write_fqns.update(self._get_registry_target_map().values())
+                fast = self._fast_review(chunk_code, artifact.generated_pyspark,
+                                          allowed_write_fqns=allowed_write_fqns)
                 if not fast["issues_found"]:
                     log.info("fast_review_passed", proc=proc, chunk=chunk)
                     review = {"issues_found": False, "feedback": ""}
@@ -599,6 +655,22 @@ class ConversionAgent:
                 )
 
             elif artifact.route == ConversionRoute.DETERMINISTIC_THEN_REPAIR:
+                # Target-catalog rewrite on the partial deterministic output
+                # so the agentic repair loop sees already-routed writes and
+                # focuses on the genuine TODOs. Runs even when per-chunk
+                # target_context is empty — the run-wide registry fallback
+                # still applies.
+                tgt_ctx = getattr(task, "target_context", None) or {}
+                if artifact.generated_pyspark:
+                    rewritten = self._rewrite_write_targets(
+                        artifact.generated_pyspark, tgt_ctx)
+                    if rewritten != artifact.generated_pyspark:
+                        log.info("deterministic_target_rewrite",
+                                 proc=proc, chunk=chunk, path="repair",
+                                 chunk_targets=len(tgt_ctx),
+                                 registry_targets=len(self._get_registry_target_map()))
+                        artifact.generated_pyspark = rewritten
+
                 # Medium confidence — let agentic loop fix TODOs only
                 # We inject the converter's output as context for the agent
                 log.info("deterministic_needs_repair", proc=proc, chunk=chunk,
@@ -815,6 +887,30 @@ ORACLE → PYSPARK CONVERSION RULES:
                     )
                 col_analysis_block = "\n".join(col_lines) + "\n"
 
+        # Target-catalog routing block: explicit write-FQN allow-list from
+        # Planning P3. Only emitted for chunks with at least one write-role
+        # table (role ∈ {target, both}) when output_catalog is set.
+        target_ctx = getattr(task, "target_context", None) or {}
+        target_block = ""
+        if target_ctx:
+            lines = ["\nTARGET TABLE LOCATIONS (all writes MUST use these exact FQNs):"]
+            for src_name, spec in target_ctx.items():
+                if not isinstance(spec, dict):
+                    continue
+                tgt = spec.get("target_fqn", "")
+                if not tgt:
+                    continue
+                role = spec.get("role", "target")
+                status = spec.get("target_status", "")
+                lines.append(f"  {src_name} → {tgt}  (role={role}, status={status})")
+            lines.append(
+                "Every INSERT INTO / UPDATE / DELETE FROM / MERGE INTO / CREATE TABLE AS / "
+                "saveAsTable / insertInto / writeTo MUST reference one of the FQNs above — "
+                "not the source FQN, not a bare table name, not an @dblink reference. "
+                "READ statements keep using the TABLE SCHEMA FQNs."
+            )
+            target_block = "\n".join(lines) + "\n"
+
         # Query mode: simpler user content — no callee/udf/write/state blocks
         if self._is_query_mode:
             user_content = f"""Convert this SQL query to Trino SQL.
@@ -825,7 +921,7 @@ ORACLE → PYSPARK CONVERSION RULES:
 {type_map_block}TABLE SCHEMA (exact Trino column names and types):
 {json.dumps(task.schema_context, indent=2) if task.schema_context else "  (no tables)"}
 
-{col_analysis_block}
+{target_block}{col_analysis_block}
 --- SOURCE QUERY (lines {task.start_line}–{task.end_line}) ---
 {chunk_code}
 --- END SOURCE QUERY ---
@@ -841,7 +937,7 @@ Convert, validate with validate_sql, execute with query_trino(sql + " LIMIT 1"),
 {type_map_block}TABLE SCHEMA (exact Trino column names and types):
 {json.dumps(task.schema_context, indent=2) if task.schema_context else "  (no tables)"}
 
-{col_analysis_block}PRIOR CHUNK VARIABLES (already exist — do NOT re-declare):
+{target_block}{col_analysis_block}PRIOR CHUNK VARIABLES (already exist — do NOT re-declare):
 {json.dumps(task.state_vars, indent=2) if task.state_vars else "  (first chunk)"}
 
 {callee_block}
@@ -970,6 +1066,21 @@ Convert, test with your tools, and call submit_result when done."""
                     source_file = sr.get("source_file", source_file)
                     break
 
+        # Merge target-catalog routing info into schema_context so the
+        # extractor can emit role-aware FQN annotations (read vs write).
+        # Each entry may gain `target_fqn` + `role` keys.
+        merged_schema_ctx = dict(task.schema_context or {})
+        for src_name, spec in (getattr(task, "target_context", None) or {}).items():
+            if not isinstance(spec, dict) or not spec.get("target_fqn"):
+                continue
+            base = dict(merged_schema_ctx.get(src_name, {}))
+            base["target_fqn"] = spec.get("target_fqn", "")
+            base["role"]       = spec.get("role", "target")
+            # Keep the original trino_fqn for read references.
+            if "trino_fqn" not in base and spec.get("source_fqn"):
+                base["trino_fqn"] = spec["source_fqn"]
+            merged_schema_ctx[src_name] = base
+
         result = self.sandbox.run(
             script="extraction/extract_structure.py",  # Reuse existing script
             args={
@@ -977,7 +1088,7 @@ Convert, test with your tools, and call submit_result when done."""
                 "source_file":  source_file,
                 "start_line":   task.start_line,
                 "end_line":     task.end_line,
-                "schema_context": task.schema_context,
+                "schema_context": merged_schema_ctx,
             },
         )
 
@@ -1658,6 +1769,131 @@ When you are done testing and satisfied, return ONLY the final SQL in a ```sql c
 
         return ""
 
+    def _get_registry_target_map(self) -> dict[str, str]:
+        """Lazy-load the run-wide target_fqn map from table_registry.json.
+
+        Loaded on first access because the registry is written by the
+        Analysis Agent *after* this Conversion Agent is instantiated.
+        Empty map if the registry doesn't exist or output_catalog wasn't
+        configured (no entries will have role=target/both).
+        """
+        if self._registry_target_map is not None:
+            return self._registry_target_map
+        rm: dict[str, str] = {}
+        try:
+            reg = self.store.read("analysis", "table_registry.json")
+            for src_name, entry in (reg.get("entries") or {}).items():
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("role") not in ("target", "both"):
+                    continue
+                tgt = entry.get("target_fqn") or ""
+                if not tgt:
+                    continue
+                rm[src_name.lower()] = tgt
+                bare = src_name.split(".")[-1].lower()
+                if bare and bare not in rm:
+                    rm[bare] = tgt
+        except Exception:
+            pass
+        self._registry_target_map = rm
+        return rm
+
+    def _rewrite_write_targets(self, code: str, target_context: dict) -> str:
+        """Rewrite INSERT/UPDATE/DELETE/MERGE/CTAS targets + PySpark writer
+        calls in `code` so they point at the target-catalog FQN listed in
+        `target_context` (instead of the source FQN that the deterministic
+        converter emits verbatim).
+
+        Mapping key = the source table name as found in target_context
+        (e.g. `Mis.Lac_Mis_Archive` → `lz_lakehouse.lm_target_schema.lac_mis_archive`).
+        Falls back to the full run-wide registry map so A2 misclassifications
+        (e.g. staging table tagged TEMP_TABLE, dropped from chunk.tables)
+        don't leak through as un-routed writes.
+
+        The rewrite is done per write-verb occurrence only — READ references
+        are left alone. `@dblink` suffixes are tolerated.
+        """
+        if not code:
+            return code
+
+        # Build a bare-name → target_fqn lookup.  Start from the chunk's
+        # per-chunk target_context, then fill in any remaining registry
+        # targets as a safety net.
+        name_map: dict[str, str] = {}
+        for src_name, spec in (target_context or {}).items():
+            if not isinstance(spec, dict):
+                continue
+            tgt = spec.get("target_fqn", "")
+            if not tgt:
+                continue
+            name_map[src_name.lower()] = tgt
+            bare = src_name.split(".")[-1].lower()
+            if bare and bare not in name_map:
+                name_map[bare] = tgt
+
+        for key, tgt in self._get_registry_target_map().items():
+            name_map.setdefault(key, tgt)
+
+        if not name_map:
+            return code
+
+        def _replace_target(match: "re.Match[str]") -> str:
+            verb = match.group(1)
+            raw_name = match.group(2)
+            # Strip a trailing @dblink + compare case-insensitively against
+            # both the full name and the bare tail.
+            stripped = re.sub(r"@[\w$]+$", "", raw_name).strip().rstrip(";,)")
+            tgt = (
+                name_map.get(stripped.lower())
+                or name_map.get(stripped.split(".")[-1].lower())
+            )
+            if not tgt:
+                return match.group(0)
+            # Preserve original whitespace after the verb.
+            whitespace = match.group(0).split(raw_name, 1)[0]
+            return f"{whitespace}{tgt}"
+
+        # SQL write verbs: INSERT INTO / UPDATE / DELETE FROM / MERGE INTO
+        code = re.sub(
+            r"(INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO)\s+([\w\.]+(?:@[\w$]+)?)",
+            _replace_target,
+            code,
+            flags=re.IGNORECASE,
+        )
+
+        # CREATE TABLE … AS
+        code = re.sub(
+            r"(CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+([\w\.]+(?:@[\w$]+)?)(\s+AS\b)",
+            lambda m: (
+                f"{m.group(1)} "
+                f"{name_map.get(re.sub(r'@[\w$]+$', '', m.group(2)).lower(), None) or name_map.get(re.sub(r'@[\w$]+$', '', m.group(2)).split('.')[-1].lower(), m.group(2))}"
+                f"{m.group(3)}"
+            ),
+            code,
+            flags=re.IGNORECASE,
+        )
+
+        # PySpark DataFrame writers: .saveAsTable("X") / .insertInto("X") / .writeTo("X")
+        def _replace_df_target(match: "re.Match[str]") -> str:
+            method, raw_name = match.group(1), match.group(2)
+            stripped = re.sub(r"@[\w$]+$", "", raw_name).strip()
+            tgt = (
+                name_map.get(stripped.lower())
+                or name_map.get(stripped.split(".")[-1].lower())
+            )
+            if not tgt:
+                return match.group(0)
+            return f'.{method}("{tgt}")'
+
+        code = re.sub(
+            r'\.(saveAsTable|insertInto|writeTo)\(\s*["\']([\w\.]+(?:@[\w$]+)?)["\']\s*\)',
+            _replace_df_target,
+            code,
+        )
+
+        return code
+
     def _write_deterministic_proc_file(self, task, converted_code: str) -> None:
         """Write the `proc_{name}.{py|sql}` file expected by the Validation
         Agent for single-attempt deterministic-accept paths.
@@ -1733,12 +1969,18 @@ Output ONLY the corrected {target_label} program — no markdown fences, no pros
         cleaned = re.sub(r"\s+", " ", feedback.lower()).strip()
         return hashlib.md5(cleaned[:200].encode()).hexdigest()[:10]
 
-    def _fast_review(self, source_code: str, converted_code: str) -> dict:
+    def _fast_review(self, source_code: str, converted_code: str,
+                     allowed_write_fqns: set[str] | list[str] | None = None) -> dict:
         """Tier-2: deterministic pre-review — no LLM call.
 
         Cheap statement-count + silent-NULL heuristics. If this fast check
         passes, we skip the full ~12 s LLM semantic review (which often adds
         no value on chunks that are clearly well-formed).
+
+        When `allowed_write_fqns` is non-empty, also enforces that every
+        INSERT/UPDATE/DELETE/MERGE/CTAS/saveAsTable/insertInto/writeTo
+        target in the converted code is one of the allow-listed FQNs
+        (target-catalog routing). Violations are added to the feedback.
 
         Returns the same shape as `_semantic_review` so callers can chain:
             review = self._fast_review(...)
@@ -1815,6 +2057,18 @@ Output ONLY the corrected {target_label} program — no markdown fences, no pros
             issues.append(
                 f"Untranslated Oracle remnants: {remnants} occurrences of "
                 f"NVL/DECODE/SYSDATE/ROWNUM in converted code.")
+
+        # Target-catalog write-FQN allow-list (only when caller provided a
+        # non-empty list of allowed write targets from task.target_context).
+        if allowed_write_fqns:
+            try:
+                from sql_migration.core.trino_sql_validator import validate_write_targets
+                write_violations = validate_write_targets(
+                    converted_code, allowed_write_fqns)
+                if write_violations:
+                    issues.extend(write_violations[:5])
+            except Exception as exc:
+                log.debug("fast_review_write_check_skipped", error=str(exc)[:100])
 
         if issues:
             return {

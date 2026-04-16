@@ -94,6 +94,10 @@ infrastructure/hive-metastore/jars/*.jar
 # Sensitive / customer-supplied SQL inputs that should not live in a public repo
 inputs/Oracle_psql.sql
 
+# Local assistant / UI state (not shared)
+.claude/
+.nicegui/
+
 # Internal run journal — contains debugging history, partial key prefixes,
 # and run-specific paths; not meant for the shared repo
 Run_tracker.md

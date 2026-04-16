@@ -829,6 +829,7 @@ class OrchestratorAgent:
                 end_line=chunk.end_line,
                 strategy=plan_entry.strategy,
                 schema_context=chunk.schema_context,
+                target_context=getattr(chunk, "target_context", {}) or {},
                 construct_hints=chunk.construct_hints,
                 state_vars=merged_state_vars,
                 loop_guards=plan_entry.loop_guards,
