@@ -377,4 +377,5 @@ ui.run(
     dark=True,
     storage_secret="lh-genie-v10-migration-accelerator",
     show=True,
+    reload=False,
 )
